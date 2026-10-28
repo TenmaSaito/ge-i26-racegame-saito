@@ -36,6 +36,19 @@ set(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")
 if(EMSCRIPTEN)
     message(STATUS "TARGET_PLATFORM=Browser (Emscripten)")
 
+    # 配布用シングルファイル版: Wasm とアセットを 1 つの JS に埋め込む。
+    # 外部ファイルを読まないので、index.html を file:// で直接開いても動く。
+    #   emcmake cmake -B build-single -DRACEGAME_SINGLE_FILE=ON
+    option(RACEGAME_SINGLE_FILE "Wasm とアセットを 1 つの JS に埋め込む" OFF)
+    if(RACEGAME_SINGLE_FILE)
+        set(ASSET_LINK_FLAG "SHELL:--embed-file ${ASSETS_DIR}@/assets")
+        set(SINGLE_FILE_FLAG "-sSINGLE_FILE=1")
+        message(STATUS "RACEGAME_SINGLE_FILE=ON (embed assets)")
+    else()
+        set(ASSET_LINK_FLAG "SHELL:--preload-file ${ASSETS_DIR}@/assets")
+        set(SINGLE_FILE_FLAG "")
+    endif()
+
     set(EMSCRIPTEN_SDL_FLAGS
         "-sUSE_SDL=2"
         "-sUSE_SDL_IMAGE=2"
@@ -84,10 +97,16 @@ if(EMSCRIPTEN)
         "-sMIN_WEBGL_VERSION=2"
         "-sMAX_WEBGL_VERSION=2"
         "-sFULL_ES3=1"
-        "SHELL:--preload-file ${ASSETS_DIR}@/assets"
+        ${SINGLE_FILE_FLAG}
+        ${ASSET_LINK_FLAG}
     )
 
-    set_target_properties(racegame PROPERTIES SUFFIX ".html")
+    if(RACEGAME_SINGLE_FILE)
+        # シングルファイル版は JS 単体で出す（自前の index.html と組にする）
+        set_target_properties(racegame PROPERTIES SUFFIX ".js")
+    else()
+        set_target_properties(racegame PROPERTIES SUFFIX ".html")
+    endif()
 
 else()
     message(STATUS "TARGET_PLATFORM=Native (${CMAKE_SYSTEM_NAME})")
