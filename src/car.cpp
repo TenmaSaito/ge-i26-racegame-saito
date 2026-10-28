@@ -1,5 +1,6 @@
 #include "car.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -14,6 +15,12 @@ constexpr float kRolling = 0.9f;
 constexpr float kWheelbase = 3.05f;
 constexpr float kSteerRate = 2.6f;
 constexpr float kWheelRadius = 0.34f;
+
+// --- ドリフト用 -------------------------------------------------------------
+constexpr float kGripLateral = 15.0f;   // 通常時の横グリップ（横速度の減衰率、1/s）
+constexpr float kGripDrift = 1.15f;     // ドリフト時の横グリップ。これだけ残すと滑り続ける
+constexpr float kMaxSlipAngle = 0.95f;  // 目標スリップ角の上限（約54度）
+constexpr float kDriftMinSpeed = 9.0f;  // ドリフトに入れる最低速度（m/s、約32km/h）
 
 float maxSteerAt(float speed) {
     return 0.46f / (1.0f + std::fabs(speed) * 0.085f);
@@ -30,37 +37,151 @@ void Car::reset(const Track& track) {
     steerAngle = 0;
     wheelSpin = 0;
     brakeHold = 0;
+    velX = 0;
+    velZ = 0;
+    lateralSpeed = 0;
+    slipAngle = 0;
+    drifting = false;
+    driftAmount = 0;
+    driftCommand = 0;
+    driftCharge = 0;
+    driftScore = 0;
+    driftChain = 0;
+    driftBestChain = 0;
     onAsphalt = true;
     ground = track.query(x, z, y);
 }
 
-void Car::stepGrip(float dt) {
+void Car::stepDrift(float dt, const DriveInput& input) {
     // ------------------------------------------------------------------------
-    // グリップ走行。ドリフトはここには書いていない。
+    // ドリフト走行（Inertial Drift 風）。
     //
-    // 速度は車体の前方だけを向く。横滑りはしない。
-    // 走っているときの曲がりは、滑らない自転車モデル（ホイールベースと前輪の切れ角）。
-    // ほぼ止まっているときは、据え切りで少しだけ向きが変わる。壁に向かって止まっても戻れる。
+    // 肝は「速度はスカラーではなくベクトル」なこと。速度ベクトル (velX, velZ) は
+    // ワールド座標に残る（＝慣性）。車体（yaw）だけが先に回るので、進行方向と
+    // 車体の向きがずれ、そのずれがスリップ角＝横滑りになる。グリップ走行は
+    // 「横速度を毎フレーム強く殺す」場合の特殊形としてここに含まれる。
     //
-    // ドリフトの課題では、この関数を差し替える。
-    // たとえば横方向の速度、スリップ角、前後で違うグリップをここに足す。
-    // アクセル、ブレーキ、壁との接触は update() 側にある。
+    // きっかけは 3 つ。
+    //   1. ドリフトボタン（Space / Shift、パッド B / LB / RB）を押しながら切る
+    //   2. 右スティック（ツインスティック）: 切った向きに車体だけを回して滑らせる
+    //   3. フリック: 高速で大きく切りながらアクセルを踏み続けるとリアが流れる
+    // ドリフト中は横グリップが kGripDrift まで落ち、ステア（または右スティック）が
+    // 目標スリップ角を決める。逆に切れば（カウンターステア）スリップ角が縮んで
+    // 収束する。ボタンを離すとグリップが戻り、滑りが収まってドリフト終了。
+    //
+    // アクセル、ブレーキ、壁との接触は update() 側にある。update() は前方向の
+    // 速度成分である speed に駆動力を積分してからここを呼ぶ。
     // ------------------------------------------------------------------------
+    const float sinYaw0 = std::sin(yaw);
+    const float cosYaw0 = std::cos(yaw);
+    // 前フレーム確定時点の前方向速度。speed は update() が駆動力を積分済みなので、
+    // その差分が「今フレーム、車体前方へ新たに加わった速度」になる。
+    const float forwardBefore = velX * sinYaw0 + velZ * cosYaw0;
+    const float driveDelta = speed - forwardBefore;
+
+    // --- ドリフトの開始・維持の判定 -------------------------------------
+    const float steerIn = clampf(input.steer, -1.0f, 1.0f);
+    const float twinIn = clampf(input.driftSteer, -1.0f, 1.0f);
+    const bool twinActive = std::fabs(twinIn) > 0.45f;
+    // フリック入力の蓄積。条件が外れたら速く抜ける。
+    if (std::fabs(steerIn) > 0.9f && input.throttle > 0.5f && speed > 26.0f) {
+        driftCharge += dt;
+    } else {
+        driftCharge = std::max(0.0f, driftCharge - dt * 2.0f);
+    }
+    const bool flick = driftCharge > 0.30f;
+    const bool wantDrift = (input.drift && std::fabs(steerIn) > 0.2f) || twinActive || flick;
+    // 操作の主役（右スティック優先）。キーボードはオン/オフしかないので、そのまま
+    // 使うと目標角度が跳ねてスピンしやすい。コマンドを平滑化して、デジタル入力
+    // でも「浅く入って深める」ができるようにする（アナログ入力にはほぼ影響なし）。
+    const float rawCommand = twinActive ? twinIn : steerIn;
+    const float commandTarget = wantDrift ? rawCommand : 0.0f;
+    driftCommand += clampf(commandTarget - driftCommand, -6.0f * dt, 6.0f * dt);
+    const float command = driftCommand;
+    // 目標スリップ角は操作と逆符号になる:
+    // 右へ切ると車体が右へ回り、速度は慣性で左に残るのでスリップ角は負。
+    const float targetSlip =
+        -(command > 0 ? 1.0f : -1.0f) * kMaxSlipAngle * (0.45f + 0.55f * std::fabs(command));
+
+    if (!drifting && wantDrift && speed > kDriftMinSpeed) {
+        drifting = true;
+    }
+    if (drifting && speed < 3.5f) {
+        drifting = false;
+    }
+    if (drifting && !wantDrift && std::fabs(slipAngle) < 0.10f && std::fabs(lateralSpeed) < 1.5f) {
+        drifting = false;
+    }
+    // グリップ量は急に切り替えず滑らかに移す（入るとき速く、戻るとき少し遅く）。
+    const float amountTarget = drifting ? 1.0f : 0.0f;
+    const float amountRate = drifting ? 3.0f : 1.8f;
+    driftAmount += clampf(amountTarget - driftAmount, -amountRate * dt, amountRate * dt);
+
+    // --- ヨーレート --------------------------------------------------------
     float yawRate = 0;
     if (std::fabs(speed) > 0.05f) {
         yawRate = (speed / kWheelbase) * std::tan(steerAngle);
     }
     float slow = clampf(1.0f - std::fabs(speed) / 8.0f, 0.0f, 1.0f);
     yawRate += steerAngle * 0.9f * slow;
+    if (driftAmount > 0.01f && (velX != 0.0f || velZ != 0.0f)) {
+        const float velAngle = std::atan2(velX, velZ);  // 進行方向（yaw と同じ測り方）
+        if (wantDrift) {
+            // 目標スリップ角になる車体の向きへ回す追加ヨー。
+            const float yawErr = wrapPi((velAngle - targetSlip) - yaw);
+            yawRate += clampf(yawErr * 3.0f, -1.6f, 1.6f) * driftAmount;
+        } else {
+            // 入力を離したら、車体を進行方向へ戻す向きに弱く回して収束を助ける。
+            const float yawErr = wrapPi(velAngle - yaw);
+            yawRate += clampf(yawErr * 1.2f, -0.8f, 0.8f) * driftAmount;
+        }
+    }
     yaw += yawRate * dt;
 
-    x += std::sin(yaw) * speed * dt;
-    z += std::cos(yaw) * speed * dt;
+    // --- 新しい車体軸で速度を分解する（速度ベクトル自体はワールドに保持） ---
+    const float sinYaw = std::sin(yaw);
+    const float cosYaw = std::cos(yaw);
+    float vf = velX * sinYaw + velZ * cosYaw;   // 前方向成分
+    float vl = velX * cosYaw - velZ * sinYaw;   // 横方向成分（右が正）
+    vf += driveDelta;                           // 駆動力は車体前方へ足す
+
+    // --- グリップ: 横速度を指数減衰させる ---------------------------------
+    float grip = kGripLateral + (kGripDrift - kGripLateral) * driftAmount;
+    if (!onAsphalt) {
+        grip *= 0.55f;  // 芝はもともと滑る
+    }
+    vl *= std::exp(-grip * dt);
+    if (input.drift && drifting) {
+        vf -= vf * 0.35f * dt;  // 後輪ロック相当。前方向も少しだけ削れる
+    }
+
+    // --- 速度ベクトルを再構成して位置を進める ------------------------------
+    velX = sinYaw * vf + cosYaw * vl;
+    velZ = cosYaw * vf - sinYaw * vl;
+    x += velX * dt;
+    z += velZ * dt;
+
+    speed = vf;
+    lateralSpeed = vl;
+    slipAngle = vf > 0.5f ? std::atan2(vl, vf) : 0.0f;
+
+    // --- ドリフトのスコア（角度 x 速度で加点、距離をチェーンとして数える） --
+    if (drifting && driftAmount > 0.4f && vf > 5.0f) {
+        driftChain += std::sqrt(velX * velX + velZ * velZ) * dt;
+        driftScore += std::fabs(slipAngle) * vf * dt * 12.0f;
+        if (driftChain > driftBestChain) {
+            driftBestChain = driftChain;
+        }
+    } else if (!drifting) {
+        driftChain = 0;
+    }
 }
 
 void Car::update(float dt, const DriveInput& input, const Track& track) {
-    float target = clampf(input.steer, -1.0f, 1.0f) * maxSteerAt(speed);
-    float step = kSteerRate * dt;
+    // ドリフト中はカウンターステアが要るので、切れ角と応答を少し広げる。
+    float steerMax = maxSteerAt(speed) * (drifting ? 1.3f : 1.0f);
+    float target = clampf(input.steer, -1.0f, 1.0f) * steerMax;
+    float step = kSteerRate * (drifting ? 1.35f : 1.0f) * dt;
     steerAngle += clampf(target - steerAngle, -step, step);
     steerAngle = clampf(steerAngle, -0.6f, 0.6f);
 
@@ -85,7 +206,7 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
     if (std::fabs(speed) > 0.05f) {
         force -= kRolling * (speed > 0 ? 1.0f : -1.0f);
     }
-    // 芝は加速が鈍く、速度も伸びない。横には滑らない。
+    // 芝は加速が鈍く、速度も伸びない（横グリップの低下は stepDrift 側）。
     if (!onAsphalt) {
         if (force > 0) {
             force *= 0.55f;
@@ -103,7 +224,7 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
     speed = clampf(speed, -kMaxReverse, kMaxSpeed);
     wheelSpin += speed / kWheelRadius * dt;
 
-    stepGrip(dt);
+    stepDrift(dt, input);
 
     float preferS = ground.found ? ground.s : -1.0f;
     ground = track.query(x, z, y, preferS);
@@ -124,6 +245,32 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
             if (speed > cap) {
                 speed = cap;
             }
+        }
+        // 速度ベクトル側も壁に合わせる。外向き成分を残すと、次のフレームも
+        // 壁へ滑り続けてしまう。内向き・沿う向きの成分（立て直し）は残す。
+        float outX = ground.rightX * sign;
+        float outZ = ground.rightZ * sign;
+        float outVel = velX * outX + velZ * outZ;
+        if (outVel > 0) {
+            velX -= outX * outVel;
+            velZ -= outZ * outVel;
+        }
+        // speed の上限（上の cap）をベクトルへ反映し直し、前後・横成分を取り直す。
+        {
+            float fx = std::sin(yaw);
+            float fz = std::cos(yaw);
+            float rx = std::cos(yaw);
+            float rz = -std::sin(yaw);
+            float vf = velX * fx + velZ * fz;
+            float vl = velX * rx + velZ * rz;
+            if (vf > speed) {
+                vf = speed;
+            }
+            velX = fx * vf + rx * vl;
+            velZ = fz * vf + rz * vl;
+            speed = vf;
+            lateralSpeed = vl;
+            slipAngle = vf > 0.5f ? std::atan2(vl, vf) : 0.0f;
         }
         ground.lateral = sign * wall;
     }

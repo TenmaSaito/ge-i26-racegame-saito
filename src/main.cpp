@@ -167,7 +167,9 @@ PadPulse readBrowserPad(DriveInput& input) {
         const bool standard = std::strcmp(pad.mapping, "standard") == 0 || (pad.numButtons >= 16 && pad.numAxes >= 2);
         input.steer += stickDead(axis(0));
         if (standard) {
-            input.steer += stickDead(axis(2));
+            // 右スティックはステアに混ぜず、ドリフト専用（ツインスティック）。
+            input.driftSteer += stickDead(axis(2));
+            if (held(1) || held(4) || held(5)) input.drift = true;  // B / LB / RB
             if (held(14)) input.steer -= 1;
             if (held(15)) input.steer += 1;
             if (held(12)) input.throttle = 1;
@@ -201,8 +203,25 @@ DriveInput readDrive(SDL_GameController* pad, PadPulse& pulse) {
     DriveInput input;
     if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) input.throttle = 1;
     if (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) input.brake = 1;
-    if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) input.steer -= 1;
-    if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) input.steer += 1;
+    // キーボードのツインスティック: A/D と矢印キーを両方使っているときは、
+    // A/D をステア、矢印左右をドリフトスティックとして分ける（Inertial Drift 風）。
+    // 片方だけのときは従来どおり、その側がステアになる。
+    float wasdSteer = 0;
+    float arrowSteer = 0;
+    if (keys[SDL_SCANCODE_A]) wasdSteer -= 1;
+    if (keys[SDL_SCANCODE_D]) wasdSteer += 1;
+    if (keys[SDL_SCANCODE_LEFT]) arrowSteer -= 1;
+    if (keys[SDL_SCANCODE_RIGHT]) arrowSteer += 1;
+    if (wasdSteer != 0 && arrowSteer != 0) {
+        input.steer += wasdSteer;
+        input.driftSteer += arrowSteer;
+    } else {
+        input.steer += wasdSteer + arrowSteer;
+    }
+    if (keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT] ||
+        keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) {
+        input.drift = true;
+    }
 #ifndef __EMSCRIPTEN__
     if (pad) {
         float throttle = stickAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
@@ -212,7 +231,13 @@ DriveInput readDrive(SDL_GameController* pad, PadPulse& pulse) {
         input.throttle = std::max(input.throttle, throttle);
         input.brake = std::max(input.brake, brake);
         input.steer += stickAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
-        input.steer += stickAxis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
+        // 右スティックはステアに混ぜず、ドリフト専用（ツインスティック）。
+        input.driftSteer += stickAxis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
+        if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_B) ||
+            SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ||
+            SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) {
+            input.drift = true;
+        }
         if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_UP)) input.throttle = 1;
         if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) input.brake = 1;
         if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) input.steer -= 1;
@@ -234,6 +259,7 @@ DriveInput readDrive(SDL_GameController* pad, PadPulse& pulse) {
     input.throttle = clampf(input.throttle, 0, 1);
     input.brake = clampf(input.brake, 0, 1);
     input.steer = clampf(input.steer, -1, 1);
+    input.driftSteer = clampf(input.driftSteer, -1, 1);
     return input;
 }
 
@@ -266,7 +292,10 @@ void updateCamera(App& app, float dt) {
     const float up[3] = {3.3f, 1.55f, 7.2f};
     const float ahead[3] = {9.0f, 6.0f, 14.0f};
     int mode = app.camera.mode;
-    Vec3 forward{std::sin(app.car.yaw), 0, std::cos(app.car.yaw)};
+    // ドリフト中は車体の向きではなく進行方向寄りにカメラを向ける。
+    // 車がカニ走りしても視線が置いていかれず、滑っている感じが伝わる。
+    float heading = app.car.yaw + app.car.slipAngle * 0.55f * app.car.driftAmount;
+    Vec3 forward{std::sin(heading), 0, std::cos(heading)};
     Vec3 eye = Vec3{app.car.x, app.car.y, app.car.z} - forward * back[mode] + Vec3{0, up[mode], 0};
     Vec3 look = Vec3{app.car.x, app.car.y, app.car.z} + forward * ahead[mode] + Vec3{0, 1.15f, 0};
     TrackPose under = app.track.query(eye.x, eye.z, app.car.y, app.car.ground.s);
@@ -335,7 +364,9 @@ void drawHud(App& app) {
     Renderer& hud = app.renderer;
     hud.beginHud();
     char line[96];
-    int kmh = static_cast<int>(std::lround(app.car.speed * 3.6f));
+    // 速度表示はベクトルの大きさ。ドリフト中は前方向成分だけだと実際より遅く見える。
+    float velMag = std::sqrt(app.car.velX * app.car.velX + app.car.velZ * app.car.velZ);
+    int kmh = static_cast<int>(std::lround(velMag * 3.6f));
     std::snprintf(line, sizeof(line), "%d KM/H", kmh);
     hud.drawText(24, 22, 4.0f, line, 0.95f, 0.96f, 0.98f, 1);
 
@@ -364,17 +395,30 @@ void drawHud(App& app) {
     }
     hud.drawText(24, 116, 2.0f, line, 0.9f, 0.9f, 0.92f, 1);
 
+    // ドリフト表示: 角度とスコアと継続距離。滑っている間だけ出す。
+    if (app.car.drifting) {
+        int deg = static_cast<int>(std::lround(std::fabs(app.car.slipAngle) * 57.29578f));
+        std::snprintf(line, sizeof(line), "DRIFT %d DEG", deg);
+        hud.drawText(24, 142, 2.6f, line, 1.0f, 0.62f, 0.2f, 1);
+        std::snprintf(line, sizeof(line), "SCORE %d  CHAIN %d M",
+                      static_cast<int>(app.car.driftScore), static_cast<int>(app.car.driftChain));
+        hud.drawText(24, 172, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
+    }
+
     const char* camName = "CHASE";
     if (app.camera.mode == 1) camName = "CLOSE";
     if (app.camera.mode == 2) camName = "FAR";
     hud.drawText(float(hud.width) - 140, 22, 2.0f, camName, 0.8f, 0.84f, 0.88f, 1);
 
     if (app.showHelp) {
-        hud.drawText(24, float(hud.height) - 78, 1.7f,
-                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  R RESET  C CAMERA  P PAUSE",
+        hud.drawText(24, float(hud.height) - 102, 1.7f,
+                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  P PAUSE",
                      0.9f, 0.92f, 0.94f, 1);
+        hud.drawText(24, float(hud.height) - 78, 1.7f,
+                     "KEYBOARD TWIN-STICK: A/D STEER PLUS ARROW KEYS AS DRIFT STICK",
+                     0.75f, 0.8f, 0.84f, 1);
         hud.drawText(24, float(hud.height) - 54, 1.7f,
-                     "PAD: RT ACCEL  LT BRAKE  STICK STEER  Y CAMERA  BACK RESET  START PAUSE",
+                     "PAD: RT ACCEL  LT BRAKE  L-STICK STEER  R-STICK OR B/LB/RB DRIFT  Y CAMERA",
                      0.75f, 0.8f, 0.84f, 1);
     }
     hud.drawText(float(hud.width) - 250, float(hud.height) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
@@ -469,7 +513,9 @@ void frame(void* userdata) {
     app.renderer.draw(app.shadow, shadow);
 
     float pitch = carPitch(app);
-    float roll = std::atan(app.car.ground.cross);
+    // 路面のバンクに、横滑りの荷重で沈むロールを足す。
+    float roll = std::atan(app.car.ground.cross) -
+                 clampf(app.car.lateralSpeed * 0.010f, -0.12f, 0.12f);
     Mat4 model = carModelMatrix(app.car, pitch, roll);
     app.renderer.draw(app.body, model);
     const float wheelX = 0.82f;
@@ -492,7 +538,82 @@ void frame(void* userdata) {
 #endif
 }
 
+// ドリフトの自己確認: まっすぐ加速 -> ドリフトボタン+全開ステアで滑らせる ->
+// 緩めると収束する、の 3 段階を見る。滑らなければ (スリップ角が付かなければ) 失敗。
+int driftTest(const Track& track) {
+    Car car;
+    car.reset(track);
+    const float dt = 1.0f / 60.0f;
+    DriveInput straight;
+    straight.throttle = 1;
+    for (int i = 0; i < 60 * 3; ++i) {
+        car.update(dt, straight, track);
+    }
+    if (car.speed < 15.0f) {
+        std::printf("drift-test: did not reach speed (%.1f m/s)\n", car.speed);
+        return 5;
+    }
+    DriveInput driftIn;
+    driftIn.throttle = 1;
+    driftIn.steer = 1;
+    driftIn.drift = true;
+    float maxSlip = 0;
+    float maxLateral = 0;
+    for (int i = 0; i < 48; ++i) {  // 0.8 秒
+        car.update(dt, driftIn, track);
+        maxSlip = std::max(maxSlip, std::fabs(car.slipAngle));
+        maxLateral = std::max(maxLateral, std::fabs(car.lateralSpeed));
+    }
+    std::printf("drift-test: speed %.1f km/h  maxSlip %.0f deg  maxLateral %.1f m/s  score %.0f  chain %.0f m\n",
+                car.speed * 3.6f, maxSlip * 57.29578f, maxLateral, car.driftScore, car.driftChain);
+    if (maxSlip < 0.30f) {  // 約17度も付かないなら滑っていない
+        std::printf("drift-test: no slide\n");
+        return 6;
+    }
+    if (maxLateral < 3.0f) {
+        std::printf("drift-test: no lateral velocity\n");
+        return 7;
+    }
+    DriveInput calm;
+    calm.throttle = 0.6f;
+    for (int i = 0; i < 60 * 2; ++i) {
+        car.update(dt, calm, track);
+    }
+    std::printf("drift-test: after release slip %.0f deg  drifting %d\n",
+                std::fabs(car.slipAngle) * 57.29578f, car.drifting ? 1 : 0);
+    if (std::fabs(car.slipAngle) > 0.12f || car.drifting) {
+        std::printf("drift-test: did not recover grip\n");
+        return 8;
+    }
+    // ツインスティック単体（キーボードの A/D + 矢印、パッドの右スティック）でも
+    // 滑ることを確認する。ステアは 0、ドリフトスティックだけを倒す。
+    Car car2;
+    car2.reset(track);
+    for (int i = 0; i < 60 * 3; ++i) {
+        car2.update(dt, straight, track);
+    }
+    DriveInput twin;
+    twin.throttle = 1;
+    twin.driftSteer = -1;
+    float twinMaxSlip = 0;
+    for (int i = 0; i < 48; ++i) {
+        car2.update(dt, twin, track);
+        twinMaxSlip = std::max(twinMaxSlip, std::fabs(car2.slipAngle));
+    }
+    std::printf("drift-test: twin-stick maxSlip %.0f deg  drifting %d\n",
+                twinMaxSlip * 57.29578f, car2.drifting ? 1 : 0);
+    if (twinMaxSlip < 0.30f) {
+        std::printf("drift-test: twin-stick did not slide\n");
+        return 9;
+    }
+    return 0;
+}
+
 int selfTest(const Track& track) {
+    int driftResult = driftTest(track);
+    if (driftResult != 0) {
+        return driftResult;
+    }
     Car car;
     car.reset(track);
     float travelled = 0;
