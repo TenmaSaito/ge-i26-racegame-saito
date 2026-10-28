@@ -422,14 +422,17 @@ DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& puls
 #else
     (void)pulse;
 #endif
-    // --- マウス = ドリフトスティック -----------------------------------------
+    // --- マウス = ドリフトの強さダイヤル -------------------------------------
     // マウスで車体そのものは操作しない。ドリフトが始まった瞬間のマウス位置を
-    // 原点（スティックのニュートラル）として保存し、そこからの横方向のずれを
-    // ドリフトスティック（driftSteer）の倒し量として使う。原点に戻せば弱まり、
-    // 離すほどドリフトが強まる＝右スティック/矢印キーと同じ感覚になる。
-    // ドリフトしていない間はマウスは何もしない。
+    // 原点として保存し、そこからの横方向のずれを mouseDrift として渡す。
+    // 物理側では既存の操作に加算方式で合成される（離すほど強まる/原点に
+    // 戻せば弱まる）。スティック入力と混ぜないのは、スティック側の
+    // 「0.45 を超えたら主役交代」という崖をマウスに持ち込むと、効かない→
+    // 突然奪うという怪しい挙動になるため。デッドゾーンは約 20px と小さく、
+    // そこから比例させる。ドリフトしていない間はマウスは何もしない。
     static bool mouseAnchorActive = false;
     static int mouseAnchorX = 0;
+    static float mouseSmooth = 0;
     if (window) {
         int mx = 0;
         int my = 0;
@@ -438,16 +441,26 @@ DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& puls
             if (!mouseAnchorActive) {
                 mouseAnchorActive = true;
                 mouseAnchorX = mx;
+                mouseSmooth = 0;
             }
             int ww = 0;
             int wh = 0;
             SDL_GetWindowSize(window, &ww, &wh);
             float scale = ww > 0 ? ww * 0.25f : 300.0f;
             if (scale < 120.0f) scale = 120.0f;
-            float rel = (float)(mx - mouseAnchorX) / scale;
-            input.driftSteer += stickDead(clampf(rel, -1.0f, 1.0f));
+            float rel = clampf((float)(mx - mouseAnchorX) / scale, -1.0f, 1.0f);
+            const float dead = 20.0f / scale;  // 約20px
+            float target = 0;
+            if (std::fabs(rel) > dead) {
+                target = (rel > 0 ? 1.0f : -1.0f) *
+                         (std::fabs(rel) - dead) / (1.0f - dead);
+            }
+            // 手ブレで値が跳ねないよう軽く平滑化（1フレームで最大 0.12 まで）。
+            mouseSmooth += clampf(target - mouseSmooth, -0.12f, 0.12f);
+            input.mouseDrift = mouseSmooth;
         } else {
             mouseAnchorActive = false;
+            mouseSmooth = 0;
         }
     }
     input.throttle = clampf(input.throttle, 0, 1);
@@ -596,7 +609,8 @@ void drawDriftDebug(App& app) {
     std::snprintf(line, sizeof(line), "IN: BTN %d STEER %.2f", in.drift ? 1 : 0, in.steer);
     hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
     ty += lineH;
-    std::snprintf(line, sizeof(line), "IN: DSTICK %.2f THR %.1f", in.driftSteer, in.throttle);
+    std::snprintf(line, sizeof(line), "IN: DSTK %.2f MSE %.2f THR %.1f",
+                  in.driftSteer, in.mouseDrift, in.throttle);
     hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
     ty += lineH;
     std::snprintf(line, sizeof(line), "SCORE %d CHAIN %d M",
@@ -970,6 +984,53 @@ int driftTest(const Track& track) {
     if (twinMaxSlip < 0.30f) {
         std::printf("drift-test: twin-stick did not slide\n");
         return 9;
+    }
+    // マウス（ドリフト中のずれ量）: 新しい車で入り直し、ステアを離して
+    // ボタン+マウスだけで維持できること、逆向きのずれで打ち消せることを
+    // 確認する。
+    Car car3;
+    car3.reset(track);
+    for (int i = 0; i < 72; ++i) {
+        car3.update(dt, straight, track);
+    }
+    DriveInput enter;
+    enter.throttle = 1;
+    enter.drift = true;
+    enter.steer = -1;
+    for (int i = 0; i < 15; ++i) {
+        car3.update(dt, enter, track);
+    }
+    if (!car3.drifting) {
+        std::printf("drift-test: mouse phase could not enter drift\n");
+        return 10;
+    }
+    DriveInput mouseHold;
+    mouseHold.throttle = 1;
+    mouseHold.drift = true;
+    mouseHold.mouseDrift = -0.7f;  // 進入と同じ向きにずらしたまま保持
+    float mouseMaxSlip = 0;
+    for (int i = 0; i < 60; ++i) {
+        car3.update(dt, mouseHold, track);
+        mouseMaxSlip = std::max(mouseMaxSlip, std::fabs(car3.slipAngle));
+    }
+    std::printf("drift-test: mouse-hold maxSlip %.0f deg  drifting %d\n",
+                mouseMaxSlip * 57.29578f, car3.drifting ? 1 : 0);
+    if (mouseMaxSlip < 0.30f || !car3.drifting) {
+        std::printf("drift-test: mouse did not sustain drift\n");
+        return 11;
+    }
+    DriveInput mouseCounter;
+    mouseCounter.throttle = 1;
+    mouseCounter.drift = true;
+    mouseCounter.mouseDrift = 0.7f;  // 逆向き = カウンター
+    for (int i = 0; i < 54; ++i) {
+        car3.update(dt, mouseCounter, track);
+    }
+    std::printf("drift-test: mouse-counter slip %.0f deg\n",
+                car3.slipAngle * 57.29578f);
+    if (car3.slipAngle > 0.15f) {
+        std::printf("drift-test: mouse counter did not cancel drift\n");
+        return 12;
     }
     return 0;
 }

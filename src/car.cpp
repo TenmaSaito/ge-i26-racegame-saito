@@ -83,6 +83,12 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     const float steerIn = clampf(input.steer, -1.0f, 1.0f);
     const float twinIn = clampf(input.driftSteer, -1.0f, 1.0f);
     const bool twinActive = std::fabs(twinIn) > 0.45f;
+    // マウスはツインスティックと別チャンネルにする。スティックのような
+    // 「0.45 を超えたら主役交代」という崖があると、効かない→突然奪う、
+    // という怪しい挙動になるため。マウスは小さいデッドゾーンから比例し、
+    // 目標スリップ角へ加算方式で効かせる（下の targetSlip 合成を参照）。
+    const float mouseIn = clampf(input.mouseDrift, -1.0f, 1.0f);
+    const bool mouseActive = std::fabs(mouseIn) > 0.03f;
     // フリック入力の蓄積。条件が外れたら速く抜ける。
     if (std::fabs(steerIn) > 0.9f && input.throttle > 0.5f && speed > 26.0f) {
         driftCharge += dt;
@@ -101,7 +107,9 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // ドリフトが終わって「押して離して」の繰り返しになっていた。そのため
     // 維持の判定はこちらを使い、ドリフトを「角度をダイヤルで調整できる
     // 粘る状態」にする（入口の判定は従来どおり wantDrift）。
-    const bool anyDriftInput = input.drift || twinActive || flick;
+    // マウスは開始のきっかけにはならないが、ドリフト中にずらしていれば
+    // 維持の入力として数える（スティックを倒し続けているのと同じ）。
+    const bool anyDriftInput = input.drift || twinActive || flick || (drifting && mouseActive);
     if (wantDrift) {
         driftHold = 0.4f;  // 入力が一瞬途切れても終わらない猶予
     } else {
@@ -123,9 +131,25 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // 上限を絞る（速いコーナーで浅く安定して流せるように）。
     const float velMag = std::sqrt(velX * velX + velZ * velZ);
     const float speedCap = clampf(26.0f / std::max(velMag, 10.0f), 0.45f, 1.0f);
-    const float targetSlip =
+    float targetSlip =
         -(command > 0 ? 1.0f : -1.0f) * driftTuning.maxSlip *
         std::pow(std::fabs(command), 0.8f) * speedCap;
+    // マウスの合成: 同じ向きなら「より深い方」を採用（キー全開＋マウスで
+    // 二重に効くことはない）、逆向きなら打ち消し合う（カウンターとして
+    // 効く）。どちらも連続量なので、境目で挙動が跳ねることはない。
+    if (mouseActive && (drifting || wantDrift)) {
+        const float mouseTarget =
+            -(mouseIn > 0 ? 1.0f : -1.0f) * driftTuning.maxSlip *
+            std::pow(std::fabs(mouseIn), 0.8f) * speedCap;
+        const bool sameSide = (mouseTarget > 0.0f) == (targetSlip > 0.0f);
+        if (sameSide || std::fabs(targetSlip) < 0.01f) {
+            if (std::fabs(mouseTarget) > std::fabs(targetSlip)) {
+                targetSlip = mouseTarget;
+            }
+        } else {
+            targetSlip += mouseTarget;
+        }
+    }
 
     if (!drifting && wantDrift && speed > driftTuning.minSpeed) {
         drifting = true;
@@ -145,7 +169,7 @@ void Car::stepDrift(float dt, const DriveInput& input) {
         std::fabs(slipAngle) < 0.10f && std::fabs(lateralSpeed) < 1.5f) {
         drifting = false;
     }
-    if (drifting && anyDriftInput && !twinActive && driftCalm > 0.6f) {
+    if (drifting && anyDriftInput && !twinActive && !mouseActive && driftCalm > 0.6f) {
         drifting = false;
     }
     // グリップ量は急に切り替えず滑らかに移す。入るときの速さは進入の鋭さで
@@ -170,7 +194,21 @@ void Car::stepDrift(float dt, const DriveInput& input) {
             const float yawErr = wrapPi((velAngle - targetSlip) - yaw);
             const float yawGain = 2.0f + 1.4f * entryEff;
             const float yawClamp = 0.95f + 0.85f * entryEff;
-            yawRate += clampf(yawErr * yawGain, -yawClamp, yawClamp) * driftAmount;
+            // フィードフォワード: グリップは速度の向きを車体へ寄せてスリップを
+            // 常に消そうとするので、比例制御だけだと目標角まで届かず手前で
+            // 釣り合ってしまう（実測: 目標39度に対し約20度で頭打ち。特に
+            // ステア 0 でマウス/スティックだけで保つ場合に効かない）。
+            // 「目標角を保つのに必要なヨーレート = グリップ x 目標角」を先に
+            // 足しておくと、釣り合い点が目標角そのものになる。近づき方自体は
+            // ゲインと上限で決まるため、穏やかな進入の性格は変わらない。
+            float gripNow = driftTuning.gripNormal +
+                            (driftTuning.gripDrift - driftTuning.gripNormal) * driftAmount;
+            gripNow /= std::max(0.05f, driftTuning.inertia);
+            if (!onAsphalt) {
+                gripNow *= 0.55f;
+            }
+            const float yawFeedForward = -gripNow * targetSlip;
+            yawRate += clampf(yawErr * yawGain + yawFeedForward, -yawClamp, yawClamp) * driftAmount;
         } else {
             // 入力を離したら、車体を進行方向へ戻す向きに弱く回して収束を助ける。
             const float yawErr = wrapPi(velAngle - yaw);
