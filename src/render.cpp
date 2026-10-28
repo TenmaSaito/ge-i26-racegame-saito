@@ -249,6 +249,36 @@ void Renderer::draw(const GpuMesh& mesh, const Mat4& model) {
     glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
 }
 
+void Renderer::drawDynamic(const CpuMesh& mesh) {
+    if (mesh.indices.empty()) {
+        return;
+    }
+    if (dynVao == 0) {
+        glGenVertexArrays(1, &dynVao);
+        glGenBuffers(1, &dynVbo);
+        glGenBuffers(1, &dynIbo);
+        glBindVertexArray(dynVao);
+        glBindBuffer(GL_ARRAY_BUFFER, dynVbo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dynIbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(6 * sizeof(float)));
+    }
+    glBindVertexArray(dynVao);
+    glBindBuffer(GL_ARRAY_BUFFER, dynVbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(mesh.vertices.size() * sizeof(float)),
+                 mesh.vertices.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dynIbo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(mesh.indices.size() * sizeof(std::uint32_t)),
+                 mesh.indices.data(), GL_DYNAMIC_DRAW);
+    Mat4 identity;
+    glUniformMatrix4fv(uModel, 1, GL_FALSE, identity.m);
+    glDrawElements(GL_TRIANGLES, static_cast<int>(mesh.indices.size()), GL_UNSIGNED_INT, nullptr);
+}
+
 void Renderer::beginHud() {
     hudVerts.clear();
     hudIndices.clear();

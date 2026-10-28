@@ -109,6 +109,66 @@ void addWalls(CpuMesh& mesh, const Track& track) {
     }
 }
 
+// 路傍の木。壁の少し外に並べることで、流れる景色が速度感を生む。
+// 配置はサンプル番号からの決定的ハッシュで決める（毎回同じ景色になる）。
+// コースの別の部分が近くを通る場所（立体交差など）では、そちらに
+// はみ出さないよう全サンプルとの距離と高さの差をチェックして避ける。
+void addTrees(CpuMesh& mesh, const Track& track) {
+    const int n = static_cast<int>(track.samples.size());
+    const float grassOuter = track.halfWidth + track.curbWidth + track.runoff;
+    const Vec3 trunk{0.36f, 0.25f, 0.16f};
+    auto hash01 = [](unsigned h) {
+        h ^= h >> 16;
+        h *= 2246822519u;
+        h ^= h >> 13;
+        return float(h & 0xFFFFFFu) / float(0x1000000u);
+    };
+    for (int i = 0; i < n; ++i) {
+        // だいたい 14m ごとに片側、ときどき両側（サンプル間隔 2m 前提）。
+        bool left = (i % 7) == 0;
+        bool right = (i % 7) == 3 || (i % 11) == 0;
+        for (int side = -1; side <= 1; side += 2) {
+            if ((side < 0 && !left) || (side > 0 && !right)) {
+                continue;
+            }
+            unsigned h = unsigned(i) * 2654435761u + (side > 0 ? 97u : 13u);
+            float lat = float(side) * (grassOuter + 2.5f + hash01(h) * 13.0f);
+            Vec3 pos = onRoad(track, i, lat);
+            // 地面の高さは芝リボン（縁石の高さで水平）に合わせる。
+            float edgeLat = float(side) * (track.halfWidth + track.curbWidth);
+            float baseY = track.samples[i].y + edgeLat * track.samples[i].cross - 0.15f;
+            bool clear = true;
+            for (int k = 0; k < n && clear; k += 4) {
+                int along = std::min(std::abs(k - i), n - std::abs(k - i));
+                if (along < 40) {
+                    continue;  // 自分の区間は対象外
+                }
+                float dx = track.samples[k].x - pos.x;
+                float dz = track.samples[k].z - pos.z;
+                float d2 = dx * dx + dz * dz;
+                if (d2 < 14.0f * 14.0f && std::fabs(track.samples[k].y - baseY) > 3.0f) {
+                    clear = false;  // 立体交差や段差の近くには植えない
+                }
+                if (d2 < (track.halfWidth + 6.0f) * (track.halfWidth + 6.0f)) {
+                    clear = false;  // 別の路面に近すぎる
+                }
+            }
+            if (!clear) {
+                continue;
+            }
+            float s = 0.85f + hash01(h ^ 0x9E3779B9u) * 0.7f;
+            float g = 0.85f + hash01(h ^ 0x85EBCA6Bu) * 0.35f;
+            Vec3 leaf{0.13f * g, 0.33f * g, 0.13f * g};
+            mesh.addBox({pos.x - 0.18f * s, baseY, pos.z - 0.18f * s},
+                        {pos.x + 0.18f * s, baseY + 1.7f * s, pos.z + 0.18f * s}, trunk);
+            mesh.addBox({pos.x - 1.15f * s, baseY + 1.5f * s, pos.z - 1.15f * s},
+                        {pos.x + 1.15f * s, baseY + 3.2f * s, pos.z + 1.15f * s}, leaf);
+            mesh.addBox({pos.x - 0.8f * s, baseY + 3.0f * s, pos.z - 0.8f * s},
+                        {pos.x + 0.8f * s, baseY + 4.4f * s, pos.z + 0.8f * s}, leaf * 1.12f);
+        }
+    }
+}
+
 void addCurbs(CpuMesh& mesh, const Track& track) {
     const int n = static_cast<int>(track.samples.size());
     const Vec3 red{0.75f, 0.09f, 0.08f};
@@ -345,6 +405,10 @@ bool Track::load(const std::string& path) {
     const float grassOuter = curbOuter + runoff;
     addRibbon(visual, *this, -grassOuter, -curbOuter, {0.15f, 0.36f, 0.14f}, true);
     addRibbon(visual, *this, curbOuter, grassOuter, {0.15f, 0.36f, 0.14f}, true);
+    // 木を植える帯。壁の外側に少し暗い芝を伸ばし、その上に木を並べる。
+    addRibbon(visual, *this, -(grassOuter + 30.0f), -grassOuter, {0.11f, 0.28f, 0.11f}, true);
+    addRibbon(visual, *this, grassOuter, grassOuter + 30.0f, {0.11f, 0.28f, 0.11f}, true);
+    addTrees(visual, *this);
     addRibbon(visual, *this, -halfWidth, halfWidth, {0.17f, 0.17f, 0.19f}, false);
     addCurbs(visual, *this);
     addWalls(visual, *this);

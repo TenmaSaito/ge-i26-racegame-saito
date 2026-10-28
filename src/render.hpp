@@ -22,6 +22,8 @@ struct Renderer {
     void drawSky();
     void beginWorld(const Mat4& viewProj, Vec3 cameraPos);
     void draw(const GpuMesh& mesh, const Mat4& model);
+    // 毎フレーム作り直す小さなメッシュ（タイヤ煙）用。バッファを使い回す。
+    void drawDynamic(const CpuMesh& mesh);
     void beginHud();
     void addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a);
     void drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a);
@@ -36,6 +38,9 @@ struct Renderer {
     unsigned hudVao = 0;
     unsigned hudVbo = 0;
     unsigned hudIbo = 0;
+    unsigned dynVao = 0;
+    unsigned dynVbo = 0;
+    unsigned dynIbo = 0;
     int uViewProj = -1;
     int uModel = -1;
     int uCamPos = -1;

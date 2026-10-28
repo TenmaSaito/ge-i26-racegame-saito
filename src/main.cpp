@@ -68,6 +68,15 @@ struct Orbit {
     int mode = 0;
 };
 
+// タイヤ煙。ドリフトで後輪が滑っている間だけ生まれ、広がりながら
+// 薄くなって消える（色を空の霞色へ寄せるフェードで表現する）。
+struct SmokePuff {
+    Vec3 pos;
+    Vec3 vel;
+    float age = 0;
+    float life = 1;
+};
+
 struct App {
     std::string title = "Suzuka Circuit";  // ウィンドウタイトル（コース名）
     SDL_Window* window = nullptr;
@@ -82,6 +91,9 @@ struct App {
     GpuMesh shadow;
     Race race;
     Orbit camera;
+    std::vector<SmokePuff> smoke;
+    float smokeAcc = 0;
+    unsigned smokeSeed = 12345;
     bool running = true;
     bool paused = false;
     bool showHelp = true;
@@ -474,6 +486,7 @@ void resetRace(App& app) {
     app.car.reset(app.track);
     app.race = Race{};
     app.camera.ready = false;
+    app.smoke.clear();
 }
 
 void tickRace(Race& race, float s, float length, float dt) {
@@ -518,6 +531,82 @@ void updateCamera(App& app, float dt) {
     float blend = 1.0f - std::exp(-dt * 7.0f);
     app.camera.eye = app.camera.eye + (eye - app.camera.eye) * blend;
     app.camera.look = app.camera.look + (look - app.camera.look) * blend;
+}
+
+// タイヤ煙の発生と更新。ドリフト中（滑り角が付いて後輪が滑っている間）
+// だけ後輪位置から出し、上昇しながら広がる。
+void updateSmoke(App& app, float dt) {
+    Car& car = app.car;
+    for (SmokePuff& p : app.smoke) {
+        p.age += dt;
+        p.vel.y += 0.7f * dt;
+        float drag = std::max(0.0f, 1.0f - 0.9f * dt);
+        p.vel = p.vel * drag;
+        p.pos = p.pos + p.vel * dt;
+    }
+    app.smoke.erase(std::remove_if(app.smoke.begin(), app.smoke.end(),
+                                   [](const SmokePuff& p) { return p.age >= p.life; }),
+                    app.smoke.end());
+    auto rnd = [&app]() {
+        app.smokeSeed = app.smokeSeed * 1664525u + 1013904223u;
+        return float((app.smokeSeed >> 8) & 0xFFFFu) / 65535.0f;
+    };
+    if (car.drifting && car.driftAmount > 0.45f && std::fabs(car.slipAngle) > 0.12f &&
+        std::fabs(car.speed) > 6.0f) {
+        float rate = 45.0f + std::min(45.0f, std::fabs(car.lateralSpeed) * 3.0f);
+        app.smokeAcc += rate * dt;
+        Vec3 fwd{std::sin(car.yaw), 0, std::cos(car.yaw)};
+        Vec3 right{std::cos(car.yaw), 0, -std::sin(car.yaw)};
+        while (app.smokeAcc >= 1.0f) {
+            app.smokeAcc -= 1.0f;
+            float side = (app.smoke.size() % 2 == 0) ? 1.0f : -1.0f;
+            SmokePuff p;
+            p.pos = Vec3{car.x, car.y + 0.25f, car.z} + right * (side * 0.82f) + fwd * -1.38f;
+            p.pos.x += (rnd() - 0.5f) * 0.3f;
+            p.pos.z += (rnd() - 0.5f) * 0.3f;
+            p.vel = Vec3{-car.velX * 0.12f + (rnd() - 0.5f) * 0.8f,
+                         1.0f + rnd() * 0.8f,
+                         -car.velZ * 0.12f + (rnd() - 0.5f) * 0.8f};
+            p.life = 0.8f + rnd() * 0.5f;
+            app.smoke.push_back(p);
+            if (app.smoke.size() > 260) {
+                app.smoke.erase(app.smoke.begin());
+            }
+        }
+    } else {
+        app.smokeAcc = 0;
+    }
+}
+
+// 煙をカメラ向きの円盤として描く（八角形のビルボードを毎フレーム構築）。
+void drawSmoke(App& app) {
+    if (app.smoke.empty()) {
+        return;
+    }
+    Vec3 fwd = normalize(app.camera.look - app.camera.eye);
+    Vec3 right = normalize(cross(fwd, Vec3{0, 1, 0}));
+    Vec3 up = cross(right, fwd);
+    // 法線は真上固定にする。カメラ向きだと太陽との内積で真っ黒になり、
+    // 煙ではなく黒い塊に見えてしまうため（上面光で明るく保つ）。
+    Vec3 n{0, 1, 0};
+    CpuMesh mesh;
+    for (const SmokePuff& p : app.smoke) {
+        float t = p.age / p.life;
+        float radius = 0.35f + 1.35f * t;
+        Vec3 color = Vec3{0.52f, 0.52f, 0.55f} * (1.0f - t) + Vec3{0.88f, 0.90f, 0.92f} * t;
+        std::uint32_t base = static_cast<std::uint32_t>(mesh.vertices.size() / 9);
+        mesh.addVertex(p.pos, n, color);
+        for (int k = 0; k < 8; ++k) {
+            float a = float(k) * 0.7853981f;
+            mesh.addVertex(p.pos + right * (std::cos(a) * radius) + up * (std::sin(a) * radius),
+                           n, color);
+        }
+        for (int k = 0; k < 8; ++k) {
+            mesh.addRawTriangle(base, base + 1 + static_cast<std::uint32_t>(k),
+                                base + 1 + static_cast<std::uint32_t>((k + 1) % 8));
+        }
+    }
+    app.renderer.drawDynamic(mesh);
 }
 
 void drawMinimap(App& app) {
@@ -872,6 +961,9 @@ void frame(void* userdata) {
             ++guard;
         }
     }
+    if (!app.paused) {
+        updateSmoke(app, float(elapsed));
+    }
     updateCamera(app, float(elapsed));
 
     int drawableW = 0;
@@ -907,6 +999,7 @@ void frame(void* userdata) {
             app.renderer.draw(app.wheel, mul(model, place));
         }
     }
+    drawSmoke(app);
     drawHud(app);
     SDL_GL_SwapWindow(app.window);
 
@@ -1023,11 +1116,15 @@ int driftTest(const Track& track) {
     mouseCounter.throttle = 1;
     mouseCounter.drift = true;
     mouseCounter.mouseDrift = 0.7f;  // 逆向き = カウンター
-    for (int i = 0; i < 54; ++i) {
+    // 穏やかな進入の車はカウンターの効きも漸進的。固定フレームで切らず、
+    // 「2.5 秒以内に滑りがほぼ消えること」を見る。
+    int counterFrames = 0;
+    while (counterFrames < 150 && car3.slipAngle > 0.15f) {
         car3.update(dt, mouseCounter, track);
+        ++counterFrames;
     }
-    std::printf("drift-test: mouse-counter slip %.0f deg\n",
-                car3.slipAngle * 57.29578f);
+    std::printf("drift-test: mouse-counter slip %.0f deg after %d frames\n",
+                car3.slipAngle * 57.29578f, counterFrames);
     if (car3.slipAngle > 0.15f) {
         std::printf("drift-test: mouse counter did not cancel drift\n");
         return 12;
@@ -1188,6 +1285,9 @@ int main(int argc, char** argv) {
     App app;
     if (stem == "flow") {
         app.title = "Flow Circuit";
+    }
+    if (stem == "coast") {
+        app.title = "Coast Circuit";
     }
     app.track = std::move(track);
     if (!initGl(app)) {

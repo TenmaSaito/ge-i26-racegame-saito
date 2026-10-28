@@ -42,7 +42,6 @@ void Car::reset(const Track& track) {
     drifting = false;
     driftAmount = 0;
     driftCommand = 0;
-    driftCharge = 0;
     driftHold = 0;
     driftCalm = 0;
     driftScore = 0;
@@ -61,10 +60,9 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // 車体の向きがずれ、そのずれがスリップ角＝横滑りになる。グリップ走行は
     // 「横速度を毎フレーム強く殺す」場合の特殊形としてここに含まれる。
     //
-    // きっかけは 3 つ。
+    // きっかけは 2 つ（どちらも意図的な入力のみ。自動で入るフリックは廃止）。
     //   1. ドリフトボタン（Space / Shift、パッド B / LB / RB）を押しながら切る
     //   2. 右スティック（ツインスティック）: 切った向きに車体だけを回して滑らせる
-    //   3. フリック: 高速で大きく切りながらアクセルを踏み続けるとリアが流れる
     // ドリフト中は横グリップが driftTuning.gripDrift まで落ち、ステア（または右スティック）が
     // 目標スリップ角を決める。逆に切れば（カウンターステア）スリップ角が縮んで
     // 収束する。ボタンを離すとグリップが戻り、滑りが収まってドリフト終了。
@@ -89,14 +87,10 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // 目標スリップ角へ加算方式で効かせる（下の targetSlip 合成を参照）。
     const float mouseIn = clampf(input.mouseDrift, -1.0f, 1.0f);
     const bool mouseActive = std::fabs(mouseIn) > 0.03f;
-    // フリック入力の蓄積。条件が外れたら速く抜ける。
-    if (std::fabs(steerIn) > 0.9f && input.throttle > 0.5f && speed > 26.0f) {
-        driftCharge += dt;
-    } else {
-        driftCharge = std::max(0.0f, driftCharge - dt * 2.0f);
-    }
-    const bool flick = driftCharge > 0.30f;
-    const bool wantDrift = (input.drift && std::fabs(steerIn) > 0.2f) || twinActive || flick;
+    // 自動ドリフト（フリック: 大舵+アクセルで勝手に入る）は廃止した
+    // （ユーザー指示）。ドリフトは必ず意図的な入力（ボタン+ステア /
+    // ツインスティック）でのみ始まる。
+    const bool wantDrift = (input.drift && std::fabs(steerIn) > 0.2f) || twinActive;
     // 進入の鋭さ。ツインスティックは「倒した分だけ角度」という直接操作なので、
     // 鋭さが最低でも応答が鈍くなりすぎないよう下限を設ける（ボタン/キー/マウス
     // 経由の進入は設定どおり穏やかになる）。
@@ -109,7 +103,7 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // 粘る状態」にする（入口の判定は従来どおり wantDrift）。
     // マウスは開始のきっかけにはならないが、ドリフト中にずらしていれば
     // 維持の入力として数える（スティックを倒し続けているのと同じ）。
-    const bool anyDriftInput = input.drift || twinActive || flick || (drifting && mouseActive);
+    const bool anyDriftInput = input.drift || twinActive || (drifting && mouseActive);
     if (wantDrift) {
         driftHold = 0.4f;  // 入力が一瞬途切れても終わらない猶予
     } else {
@@ -185,6 +179,12 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     }
     float slow = clampf(1.0f - std::fabs(speed) / 8.0f, 0.0f, 1.0f);
     yawRate += steerAngle * 0.9f * slow;
+    // ドリフト中はステアによる回頭を弱める。コーナーではステアを切り続ける
+    // ため、そのままだとステアのヨーがドリフト側の角度制御と喧嘩して、
+    // 角度が浅いところで釣り合ってしまう（実測: 目標27度に対し12度）。
+    // Inertial Drift が「Lスティック=進行、Rスティック=角度」と分けている
+    // のと同じで、滑っている間は角度の主役をドリフト入力に渡す。
+    yawRate *= (1.0f - 0.5f * driftAmount);
     if (driftAmount > 0.01f && (velX != 0.0f || velZ != 0.0f)) {
         const float velAngle = std::atan2(velX, velZ);  // 進行方向（yaw と同じ測り方）
         if (anyDriftInput || driftHold > 0.0f) {
@@ -222,7 +222,20 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     const float cosYaw = std::cos(yaw);
     float vf = velX * sinYaw + velZ * cosYaw;   // 前方向成分
     float vl = velX * cosYaw - velZ * sinYaw;   // 横方向成分（右が正）
-    vf += driveDelta;                           // 駆動力は車体前方へ足す
+    // 駆動力の配分。通常は車体前方へ足すが、ドリフト中は半分を進行方向
+    // （速度ベクトルの向き）へ回す。滑りながらでも前に進み続け、ドリフト
+    // のままコーナーを抜けていく動きにする（車体前方だけだと、角度が
+    // 深いほど駆動力が進みに変わらない）。
+    const float alongVel = drifting ? 0.5f * driftAmount : 0.0f;
+    vf += driveDelta * (1.0f - alongVel);
+    if (alongVel > 0.0f && driveDelta > 0.0f) {
+        const float magV = std::sqrt(vf * vf + vl * vl);
+        if (magV > 1.0f) {
+            const float push = driveDelta * alongVel;
+            vf += push * vf / magV;
+            vl += push * vl / magV;
+        }
+    }
 
     // --- グリップ: 速度の向きを車体前方へ回す ------------------------------
     // 横速度をそのまま捨てるモデルだと、滑るほど運動エネルギーを失って失速
