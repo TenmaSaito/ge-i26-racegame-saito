@@ -101,6 +101,12 @@ struct App {
     int carSpec = 0;                   // 選択中の車種（1/2/3 キー）
     float bodyRollSm = 0;              // 車体の傾き（平滑化済み）
     float fpsSm = 60.0f;               // FPS 表示（平滑化済み）
+    // 描画用の補間ポーズ。物理は固定 60Hz で進むため、そのまま描くと
+    // 表示タイミングとのずれで前後にガクつく。1 ステップ前と現在を
+    // アキュムレータの端数で補間してから描く。
+    float prevX = 0, prevY = 0, prevZ = 0, prevYaw = 0, prevSlip = 0;
+    float viewX = 0, viewY = 0, viewZ = 0, viewYaw = 0, viewSlip = 0;
+    bool viewReady = false;
     float bodyPitchSm = 0;
     struct TrailPoint { Vec3 pos; float age; };
     std::vector<TrailPoint> trailL, trailR;  // ドリフト中のテールランプ軌跡
@@ -527,12 +533,17 @@ void tickRace(Race& race, float s, float length, float dt) {
 void updateCamera(App& app, float dt) {
     // ドライバーズアイ: 運転席の頭位置に固定。前を見る向きは車体の向き主体で、
     // ドリフト時は進行方向へ少しだけ視線を逃がす。遅れ（ブレンド）は付けない。
+    const float px = app.viewReady ? app.viewX : app.car.x;
+    const float py = app.viewReady ? app.viewY : app.car.y;
+    const float pz = app.viewReady ? app.viewZ : app.car.z;
+    const float pyaw = app.viewReady ? app.viewYaw : app.car.yaw;
+    const float pslip = app.viewReady ? app.viewSlip : app.car.slipAngle;
     if (app.camera.mode == 3) {
-        float heading = app.car.yaw + app.car.slipAngle * 0.25f * app.car.driftAmount;
+        float heading = pyaw + pslip * 0.25f * app.car.driftAmount;
         Vec3 fw{std::sin(heading), 0, std::cos(heading)};
         // 運転席の位置（キャビン上端より少し上）。デッキ面が視界の下部に
         // フードとして入るくらいの高さにする。
-        Vec3 eye = Vec3{app.car.x, app.car.y, app.car.z} + fw * -0.2f + Vec3{0, 1.22f, 0};
+        Vec3 eye = Vec3{px, py, pz} + fw * -0.2f + Vec3{0, 1.22f, 0};
         app.camera.eye = eye;
         app.camera.look = eye + fw * 10.0f + Vec3{0, -0.45f, 0};
         app.camera.ready = true;
@@ -546,10 +557,10 @@ void updateCamera(App& app, float dt) {
     int mode = app.camera.mode;
     // ドリフト中は車体の向きではなく進行方向寄りにカメラを向ける。
     // 車がカニ走りしても視線が置いていかれず、滑っている感じが伝わる。
-    float heading = app.car.yaw + app.car.slipAngle * 0.55f * app.car.driftAmount;
+    float heading = pyaw + pslip * 0.55f * app.car.driftAmount;
     Vec3 forward{std::sin(heading), 0, std::cos(heading)};
-    Vec3 eye = Vec3{app.car.x, app.car.y, app.car.z} - forward * back[mode] + Vec3{0, up[mode], 0};
-    Vec3 look = Vec3{app.car.x, app.car.y, app.car.z} + forward * ahead[mode] + Vec3{0, 1.15f, 0};
+    Vec3 eye = Vec3{px, py, pz} - forward * back[mode] + Vec3{0, up[mode], 0};
+    Vec3 look = Vec3{px, py, pz} + forward * ahead[mode] + Vec3{0, 1.15f, 0};
     TrackPose under = app.track.query(eye.x, eye.z, app.car.y, app.car.ground.s);
     if (under.found && under.xzDist < 30.0f && eye.y < under.centerY + 0.8f) {
         eye.y = under.centerY + 0.8f;
@@ -560,7 +571,9 @@ void updateCamera(App& app, float dt) {
         app.camera.ready = true;
         return;
     }
-    float blend = 1.0f - std::exp(-dt * 7.0f);
+    // 追従は速め（7→15/s）。遅いと加速時にカメラだけ置いていかれて
+    // 車が画面の中で前後に泳ぐ。補間ポーズ側が滑らかなので速くても荒れない。
+    float blend = 1.0f - std::exp(-dt * 15.0f);
     app.camera.eye = app.camera.eye + (eye - app.camera.eye) * blend;
     app.camera.look = app.camera.look + (look - app.camera.look) * blend;
 }
@@ -1103,7 +1116,12 @@ void frame(void* userdata) {
 
     if (app.paused) {
         app.accumulator = 0;
+        app.viewX = app.car.x; app.viewY = app.car.y; app.viewZ = app.car.z;
+        app.viewYaw = app.car.yaw; app.viewSlip = app.car.slipAngle;
+        app.viewReady = true;
     } else {
+        app.prevX = app.car.x; app.prevY = app.car.y; app.prevZ = app.car.z;
+        app.prevYaw = app.car.yaw; app.prevSlip = app.car.slipAngle;
         app.accumulator += elapsed;
         int guard = 0;
         while (app.accumulator >= kFixedStepSec && guard < 8) {
@@ -1112,6 +1130,19 @@ void frame(void* userdata) {
             app.accumulator -= kFixedStepSec;
             ++guard;
         }
+        float alpha = float(app.accumulator / kFixedStepSec);
+        float dx = app.car.x - app.prevX;
+        float dz = app.car.z - app.prevZ;
+        if (dx * dx + dz * dz > 400.0f) alpha = 1.0f;  // リセット等のテレポートでは補間しない
+        app.viewX = app.prevX + (app.car.x - app.prevX) * alpha;
+        app.viewY = app.prevY + (app.car.y - app.prevY) * alpha;
+        app.viewZ = app.prevZ + (app.car.z - app.prevZ) * alpha;
+        float dyaw = app.car.yaw - app.prevYaw;
+        while (dyaw > 3.14159265f) dyaw -= 6.2831853f;
+        while (dyaw < -3.14159265f) dyaw += 6.2831853f;
+        app.viewYaw = app.prevYaw + dyaw * alpha;
+        app.viewSlip = app.prevSlip + (app.car.slipAngle - app.prevSlip) * alpha;
+        app.viewReady = true;
     }
     if (!app.paused) {
         updateSmoke(app, float(elapsed));
@@ -1139,7 +1170,7 @@ void frame(void* userdata) {
         float dz = app.sceneryCenters[i].z - app.camera.eye.z;
         if (dx * dx + dz * dz < 1000.0f * 1000.0f) app.renderer.draw(app.scenery[i], identity);
     }
-    Mat4 shadow = mul(translation(app.car.x, app.car.y + 0.08f, app.car.z), rotationY(app.car.yaw));
+    Mat4 shadow = mul(translation(app.viewX, app.viewY + 0.08f, app.viewZ), rotationY(app.viewYaw));
     if (app.camera.mode != 3) app.renderer.draw(app.shadow, shadow);
 
     // 車体の傾きは荷重移動なので、目標へ一気に行かず少し遅れて追う
@@ -1147,8 +1178,8 @@ void frame(void* userdata) {
     {
         // 車体の角度は路面の平面に這わせる。前後・左右 4 点の路面高から
         // 面の傾きを求めるので、斜めに止まってもバンクと勾配の両方に合う。
-        Vec3 pos{app.car.x, app.car.y, app.car.z};
-        Vec3 fw{std::sin(app.car.yaw), 0, std::cos(app.car.yaw)};
+        Vec3 pos{app.viewX, app.viewY, app.viewZ};
+        Vec3 fw{std::sin(app.viewYaw), 0, std::cos(app.viewYaw)};
         Vec3 rt{fw.z, 0, -fw.x};
         float hF = surfaceHeightAt(app, pos + fw * 2.2f);
         float hB = surfaceHeightAt(app, pos - fw * 2.2f);
@@ -1161,7 +1192,9 @@ void frame(void* userdata) {
         app.bodyPitchSm += (pitchT - app.bodyPitchSm) * k;
         app.bodyRollSm += (rollT - app.bodyRollSm) * k;
     }
-    Mat4 model = carModelMatrix(app.car, app.bodyPitchSm, app.bodyRollSm);
+    Car viewCar = app.car;
+    viewCar.x = app.viewX; viewCar.y = app.viewY; viewCar.z = app.viewZ; viewCar.yaw = app.viewYaw;
+    Mat4 model = carModelMatrix(viewCar, app.bodyPitchSm, app.bodyRollSm);
     model = mul(translation(0, 0.05f, 0), model);  // 平面に這わせた際の角のめり込み防止
     if (app.camera.mode == 3) {
         app.renderer.draw(app.nose, model);
