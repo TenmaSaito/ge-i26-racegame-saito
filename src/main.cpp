@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -19,6 +20,21 @@
 #include <emscripten/html5.h>
 
 #include <cstring>
+
+// ブラウザ版の調整値の保存先は localStorage（ファイルはリロードで消えるため）。
+EM_JS(void, tuningSaveJs, (const char* data), {
+    try { localStorage.setItem('racegameDriftTuning', UTF8ToString(data)); } catch (e) {}
+});
+EM_JS(char*, tuningLoadJs, (), {
+    try {
+        const s = localStorage.getItem('racegameDriftTuning');
+        if (!s) return 0;
+        const n = lengthBytesUTF8(s) + 1;
+        const p = _malloc(n);
+        stringToUTF8(s, p, n);
+        return p;
+    } catch (e) { return 0; }
+});
 #endif
 
 namespace {
@@ -59,6 +75,8 @@ struct App {
     bool showHelp = true;
     bool showDriftDebug = true;  // ドリフトのデバッグ表示（B キーで切替、既定はオン）
     DriveInput lastInput;        // デバッグ表示用に直近の入力を覚えておく
+    bool showTuning = false;     // ドリフトのチューニングパネル（T キーで開閉）
+    int tuneIndex = 0;           // パネルで選択中の項目
     double accumulator = 0;
     Uint64 prevCounter = 0;
 };
@@ -86,6 +104,89 @@ void formatTime(char* buf, int size, float seconds) {
     int minutes = static_cast<int>(seconds / 60.0f);
     float rest = seconds - float(minutes) * 60.0f;
     std::snprintf(buf, size, "%d:%06.3f", minutes, rest);
+}
+
+// --- ドリフトのチューニング -------------------------------------------------
+// 項目テーブル。value は driftTuning の各フィールドへのポインタ。
+struct TuneItem {
+    const char* name;
+    float* value;
+    float lo;
+    float hi;
+    float step;
+    int display;  // 0: %.2f / 1: 度 / 2: km/h / 3: %.1f
+};
+
+TuneItem tuneItems[] = {
+    {"DRIFT GRIP", &driftTuning.gripDrift, 0.2f, 4.0f, 0.05f, 0},
+    {"INERTIA", &driftTuning.inertia, 0.4f, 2.5f, 0.05f, 0},
+    {"DRIFT DECEL", &driftTuning.driftDecel, 0.0f, 1.5f, 0.05f, 0},
+    {"MAX SLIP", &driftTuning.maxSlip, 0.35f, 1.25f, 0.035f, 1},
+    {"MIN SPEED", &driftTuning.minSpeed, 0.0f, 25.0f, 1.0f, 2},
+    {"NORMAL GRIP", &driftTuning.gripNormal, 6.0f, 30.0f, 0.5f, 3},
+};
+constexpr int kTuneItemCount = static_cast<int>(sizeof(tuneItems) / sizeof(tuneItems[0]));
+
+void clampTuning() {
+    for (const TuneItem& item : tuneItems) {
+        *item.value = clampf(*item.value, item.lo, item.hi);
+    }
+}
+
+std::string serializeTuning() {
+    char buf[320];
+    std::snprintf(buf, sizeof(buf),
+                  "gripNormal=%.3f gripDrift=%.3f inertia=%.3f driftDecel=%.3f maxSlip=%.3f minSpeed=%.3f",
+                  driftTuning.gripNormal, driftTuning.gripDrift, driftTuning.inertia,
+                  driftTuning.driftDecel, driftTuning.maxSlip, driftTuning.minSpeed);
+    return buf;
+}
+
+void parseTuning(const char* text) {
+    if (!text) {
+        return;
+    }
+    auto get = [&](const char* key, float& out) {
+        const char* p = std::strstr(text, key);
+        if (p && p[std::strlen(key)] == '=') {
+            out = std::strtof(p + std::strlen(key) + 1, nullptr);
+        }
+    };
+    get("gripNormal", driftTuning.gripNormal);
+    get("gripDrift", driftTuning.gripDrift);
+    get("inertia", driftTuning.inertia);
+    get("driftDecel", driftTuning.driftDecel);
+    get("maxSlip", driftTuning.maxSlip);
+    get("minSpeed", driftTuning.minSpeed);
+    clampTuning();
+}
+
+void saveTuning() {
+    std::string data = serializeTuning();
+#ifdef __EMSCRIPTEN__
+    tuningSaveJs(data.c_str());
+#else
+    std::ofstream out("drift_tuning.txt", std::ios::trunc);
+    if (out) {
+        out << data << "\n";
+    }
+#endif
+}
+
+void loadTuning() {
+#ifdef __EMSCRIPTEN__
+    char* p = tuningLoadJs();
+    if (p) {
+        parseTuning(p);
+        std::free(p);
+    }
+#else
+    std::ifstream in("drift_tuning.txt");
+    if (in) {
+        std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        parseTuning(data.c_str());
+    }
+#endif
 }
 
 void openPad(App& app) {
@@ -424,6 +525,50 @@ void drawDriftDebug(App& app) {
     hud.drawText(tx, ty, 1.6f, why, 0.95f, 0.5f, 0.45f, 1);
 }
 
+// ドリフトのチューニングパネル（T キー）。値はその場で物理に反映され、自動保存される。
+void drawTuning(App& app) {
+    Renderer& hud = app.renderer;
+    const float pw = 540.0f;
+    const float rowH = 34.0f;
+    const float ph = 58.0f + rowH * float(kTuneItemCount) + 44.0f;
+    const float px = (float(hud.width) - pw) * 0.5f;
+    const float py = (float(hud.height) - ph) * 0.5f - 30.0f;
+    hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.85f);
+    hud.drawText(px + 20, py + 14, 2.2f, "DRIFT TUNING", 1.0f, 0.62f, 0.2f, 1);
+    char line[96];
+    for (int i = 0; i < kTuneItemCount; ++i) {
+        const TuneItem& item = tuneItems[i];
+        float ry = py + 56.0f + rowH * float(i);
+        bool selected = i == app.tuneIndex;
+        if (selected) {
+            hud.addQuad(px + 10, ry - 4, px + pw - 10, ry + 26, 0.95f, 0.5f, 0.15f, 0.35f);
+        }
+        float r = selected ? 1.0f : 0.85f;
+        float g = selected ? 0.75f : 0.88f;
+        float b = selected ? 0.4f : 0.92f;
+        hud.drawText(px + 20, ry, 1.8f, item.name, r, g, b, 1);
+        if (item.display == 1) {
+            std::snprintf(line, sizeof(line), "%.0f DEG", *item.value * 57.29578f);
+        } else if (item.display == 2) {
+            std::snprintf(line, sizeof(line), "%.0f KM/H", *item.value * 3.6f);
+        } else if (item.display == 3) {
+            std::snprintf(line, sizeof(line), "%.1f", *item.value);
+        } else {
+            std::snprintf(line, sizeof(line), "%.2f", *item.value);
+        }
+        hud.drawText(px + 300, ry, 1.8f, line, r, g, b, 1);
+        // 値の範囲内での位置を示すバー。
+        float frac = (*item.value - item.lo) / (item.hi - item.lo);
+        float bx0 = px + 420;
+        float bx1 = px + pw - 20;
+        hud.addQuad(bx0, ry + 4, bx1, ry + 12, 0.1f, 0.12f, 0.16f, 0.9f);
+        hud.addQuad(bx0, ry + 4, bx0 + (bx1 - bx0) * frac, ry + 12, 1.0f, 0.62f, 0.2f, 0.95f);
+    }
+    float fy = py + 56.0f + rowH * float(kTuneItemCount) + 8.0f;
+    hud.drawText(px + 20, fy, 1.5f, "UP/DOWN SELECT  LEFT/RIGHT ADJUST  SHIFT: FAST", 0.75f, 0.8f, 0.84f, 1);
+    hud.drawText(px + 20, fy + 20, 1.5f, "T: CLOSE   VALUES APPLY LIVE AND SAVE AUTOMATICALLY", 0.75f, 0.8f, 0.84f, 1);
+}
+
 void drawHud(App& app) {
     Renderer& hud = app.renderer;
     hud.beginHud();
@@ -494,7 +639,7 @@ void drawHud(App& app) {
 
     if (app.showHelp) {
         hud.drawText(24, float(hud.height) - 102, 1.7f,
-                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  P PAUSE  B DEBUG",
+                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  P PAUSE  B DEBUG  T TUNE",
                      0.9f, 0.92f, 0.94f, 1);
         hud.drawText(24, float(hud.height) - 78, 1.7f,
                      "KEYBOARD TWIN-STICK: A/D STEER PLUS ARROW KEYS AS DRIFT STICK",
@@ -510,6 +655,9 @@ void drawHud(App& app) {
     drawMinimap(app);
     if (app.showDriftDebug) {
         drawDriftDebug(app);
+    }
+    if (app.showTuning) {
+        drawTuning(app);
     }
     hud.flushHud();
 }
@@ -532,14 +680,31 @@ void frame(void* userdata) {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             app.running = false;
-        } else if (event.type == SDL_KEYDOWN && !event.key.repeat) {
+        } else if (event.type == SDL_KEYDOWN) {
             SDL_Scancode code = event.key.keysym.scancode;
-            if (code == SDL_SCANCODE_ESCAPE) app.running = false;
-            else if (code == SDL_SCANCODE_R) reset = true;
-            else if (code == SDL_SCANCODE_C) app.camera.mode = (app.camera.mode + 1) % 3;
-            else if (code == SDL_SCANCODE_P) app.paused = !app.paused;
-            else if (code == SDL_SCANCODE_H) app.showHelp = !app.showHelp;
-            else if (code == SDL_SCANCODE_B) app.showDriftDebug = !app.showDriftDebug;
+            if (code == SDL_SCANCODE_T && !event.key.repeat) {
+                app.showTuning = !app.showTuning;
+            } else if (app.showTuning) {
+                // チューニング中は矢印キーを項目の選択と調整に使う（長押しリピート可）。
+                TuneItem& item = tuneItems[app.tuneIndex];
+                if (code == SDL_SCANCODE_UP) {
+                    app.tuneIndex = (app.tuneIndex + kTuneItemCount - 1) % kTuneItemCount;
+                } else if (code == SDL_SCANCODE_DOWN) {
+                    app.tuneIndex = (app.tuneIndex + 1) % kTuneItemCount;
+                } else if (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_RIGHT) {
+                    float dir = code == SDL_SCANCODE_RIGHT ? 1.0f : -1.0f;
+                    float fast = (SDL_GetModState() & KMOD_SHIFT) ? 5.0f : 1.0f;
+                    *item.value = clampf(*item.value + dir * item.step * fast, item.lo, item.hi);
+                    saveTuning();
+                }
+            } else if (!event.key.repeat) {
+                if (code == SDL_SCANCODE_ESCAPE) app.running = false;
+                else if (code == SDL_SCANCODE_R) reset = true;
+                else if (code == SDL_SCANCODE_C) app.camera.mode = (app.camera.mode + 1) % 3;
+                else if (code == SDL_SCANCODE_P) app.paused = !app.paused;
+                else if (code == SDL_SCANCODE_H) app.showHelp = !app.showHelp;
+                else if (code == SDL_SCANCODE_B) app.showDriftDebug = !app.showDriftDebug;
+            }
         } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
             openPad(app);
         } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && app.pad &&
@@ -555,6 +720,9 @@ void frame(void* userdata) {
     PadPulse padPulse;
     DriveInput input = readDrive(app.pad, padPulse);
     app.lastInput = input;
+    if (app.showTuning) {
+        input = DriveInput{};  // チューニング中は矢印キーを運転に使わない
+    }
     if (padPulse.reset) reset = true;
     if (padPulse.pause) app.paused = !app.paused;
     if (padPulse.camera) app.camera.mode = (app.camera.mode + 1) % 3;
@@ -814,6 +982,7 @@ int main(int argc, char** argv) {
     if (test) {
         return selfTest(track);
     }
+    loadTuning();
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());

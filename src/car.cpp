@@ -16,17 +16,15 @@ constexpr float kWheelbase = 3.05f;
 constexpr float kSteerRate = 2.6f;
 constexpr float kWheelRadius = 0.34f;
 
-// --- ドリフト用 -------------------------------------------------------------
-constexpr float kGripLateral = 15.0f;   // 通常時の横グリップ（横速度の減衰率、1/s）
-constexpr float kGripDrift = 1.15f;     // ドリフト時の横グリップ。これだけ残すと滑り続ける
-constexpr float kMaxSlipAngle = 0.95f;  // 目標スリップ角の上限（約54度）
-constexpr float kDriftMinSpeed = 9.0f;  // ドリフトに入れる最低速度（m/s、約32km/h）
-
 float maxSteerAt(float speed) {
     return 0.46f / (1.0f + std::fabs(speed) * 0.085f);
 }
 
 }  // namespace
+
+// ドリフトの調整値の実体。既定値は DriftTuning（car.hpp）の初期化子。
+// 実行時の変更はチューニングパネル（main.cpp）からこの変数を書き換える。
+DriftTuning driftTuning;
 
 void Car::reset(const Track& track) {
     x = track.spawnX;
@@ -65,7 +63,7 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     //   1. ドリフトボタン（Space / Shift、パッド B / LB / RB）を押しながら切る
     //   2. 右スティック（ツインスティック）: 切った向きに車体だけを回して滑らせる
     //   3. フリック: 高速で大きく切りながらアクセルを踏み続けるとリアが流れる
-    // ドリフト中は横グリップが kGripDrift まで落ち、ステア（または右スティック）が
+    // ドリフト中は横グリップが driftTuning.gripDrift まで落ち、ステア（または右スティック）が
     // 目標スリップ角を決める。逆に切れば（カウンターステア）スリップ角が縮んで
     // 収束する。ボタンを離すとグリップが戻り、滑りが収まってドリフト終了。
     //
@@ -101,9 +99,9 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // 目標スリップ角は操作と逆符号になる:
     // 右へ切ると車体が右へ回り、速度は慣性で左に残るのでスリップ角は負。
     const float targetSlip =
-        -(command > 0 ? 1.0f : -1.0f) * kMaxSlipAngle * (0.45f + 0.55f * std::fabs(command));
+        -(command > 0 ? 1.0f : -1.0f) * driftTuning.maxSlip * (0.45f + 0.55f * std::fabs(command));
 
-    if (!drifting && wantDrift && speed > kDriftMinSpeed) {
+    if (!drifting && wantDrift && speed > driftTuning.minSpeed) {
         drifting = true;
     }
     if (drifting && speed < 3.5f) {
@@ -146,13 +144,16 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     vf += driveDelta;                           // 駆動力は車体前方へ足す
 
     // --- グリップ: 横速度を指数減衰させる ---------------------------------
-    float grip = kGripLateral + (kGripDrift - kGripLateral) * driftAmount;
+    // 慣性（inertia）が大きいほど減衰が弱まり、速度ベクトルが向きを保つ。
+    float grip = driftTuning.gripNormal + (driftTuning.gripDrift - driftTuning.gripNormal) * driftAmount;
+    grip /= std::max(0.05f, driftTuning.inertia);
     if (!onAsphalt) {
         grip *= 0.55f;  // 芝はもともと滑る
     }
     vl *= std::exp(-grip * dt);
-    if (input.drift && drifting) {
-        vf -= vf * 0.35f * dt;  // 後輪ロック相当。前方向も少しだけ削れる
+    if (drifting) {
+        // ドリフト中の減速。ボタン・スティックを問わず、滑っている間ずっと効く。
+        vf -= vf * driftTuning.driftDecel * driftAmount * dt;
     }
 
     // --- 速度ベクトルを再構成して位置を進める ------------------------------

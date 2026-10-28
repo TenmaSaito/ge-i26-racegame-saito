@@ -12,6 +12,19 @@ struct DriveInput {
     bool drift = false;    // ドリフトボタン（ハンドブレーキ相当）。押しながら切ると滑る
 };
 
+// ドリフトの調整値。ゲーム中のチューニングパネル（T キー）から実行時に変更できる。
+// 値は保存され、次回起動時に復元される（ネイティブ: drift_tuning.txt、ブラウザ: localStorage）。
+struct DriftTuning {
+    float gripNormal = 15.0f;  // 通常時の横グリップ（横速度の減衰率、1/s）
+    float gripDrift = 1.15f;   // ドリフト時の横グリップ。小さいほど滑る
+    float inertia = 1.0f;      // 慣性の強さ。大きいほど速度が向きを保ち、横滑りが長引く
+    float driftDecel = 0.35f;  // ドリフト中の減速率（1/s）。大きいほどドリフトで失速する
+    float maxSlip = 0.95f;     // 目標スリップ角の上限（ラジアン、約54度）
+    float minSpeed = 9.0f;     // ドリフトに入れる最低速度（m/s、約32km/h）
+};
+
+extern DriftTuning driftTuning;
+
 struct Car {
     float x = 0;
     float y = 0;
