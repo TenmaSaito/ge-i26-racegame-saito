@@ -91,6 +91,8 @@ struct App {
     GpuMesh wheel;
     GpuMesh shadow;
     GpuMesh backdrop;
+    float mmMinX = 0, mmMaxX = 0, mmMinZ = 0, mmMaxZ = 0;  // ミニマップ範囲のキャッシュ
+    bool mmReady = false;
     GpuMesh lampsOff;
     GpuMesh lampsOn;
     GpuMesh lampsBright;
@@ -630,25 +632,32 @@ void drawMinimap(App& app) {
     float x0 = 24.0f;
     float y0 = float(app.renderer.height) - size - 28.0f;
     app.renderer.addQuad(x0, y0, x0 + size, y0 + size, 0.02f, 0.03f, 0.05f, 0.78f);
-    float minX = app.track.samples[0].x;
-    float maxX = minX;
-    float minZ = app.track.samples[0].z;
-    float maxZ = minZ;
-    for (const TrackSample& sample : app.track.samples) {
-        minX = std::min(minX, sample.x);
-        maxX = std::max(maxX, sample.x);
-        minZ = std::min(minZ, sample.z);
-        maxZ = std::max(maxZ, sample.z);
+    // 範囲はコース固定なので初回だけ計算して使い回す（毎フレーム全数走査しない）。
+    if (!app.mmReady) {
+        app.mmMinX = app.mmMaxX = app.track.samples[0].x;
+        app.mmMinZ = app.mmMaxZ = app.track.samples[0].z;
+        for (const TrackSample& sample : app.track.samples) {
+            app.mmMinX = std::min(app.mmMinX, sample.x);
+            app.mmMaxX = std::max(app.mmMaxX, sample.x);
+            app.mmMinZ = std::min(app.mmMinZ, sample.z);
+            app.mmMaxZ = std::max(app.mmMaxZ, sample.z);
+        }
+        app.mmReady = true;
     }
+    float minX = app.mmMinX;
+    float maxX = app.mmMaxX;
+    float minZ = app.mmMinZ;
+    float maxZ = app.mmMaxZ;
     float midX = (minX + maxX) * 0.5f;
     float midZ = (minZ + maxZ) * 0.5f;
     float span = std::max(maxX - minX, maxZ - minZ) * 1.12f;
     auto mapX = [&](float x) { return x0 + size * 0.5f + (x - midX) / span * (size - 18.0f); };
     auto mapY = [&](float z) { return y0 + size * 0.5f - (z - midZ) / span * (size - 18.0f); };
     const int n = static_cast<int>(app.track.samples.size());
-    for (int i = 0; i < n; ++i) {
+    // 190px のミニマップに 2000 本の線は不要。4 サンプルに 1 本で見た目は同じ。
+    for (int i = 0; i < n; i += 4) {
         const TrackSample& a = app.track.samples[i];
-        const TrackSample& b = app.track.samples[(i + 1) % n];
+        const TrackSample& b = app.track.samples[(i + 4) % n];
         float r = 0.75f, g = 0.78f, bl = 0.82f;
         if (a.bridge || b.bridge) {
             r = 0.95f;
