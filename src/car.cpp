@@ -289,9 +289,9 @@ void Car::stepDrift(float dt, const DriveInput& input) {
 
 void Car::update(float dt, const DriveInput& input, const Track& track) {
     // ドリフト中はカウンターステアが要るので、切れ角と応答を少し広げる。
-    float steerMax = maxSteerAt(speed) * (drifting ? 1.3f : 1.0f);
+    float steerMax = maxSteerAt(speed) * (drifting ? 1.3f : 1.0f) * steerMul;
     float target = clampf(input.steer, -1.0f, 1.0f) * steerMax;
-    float step = kSteerRate * (drifting ? 1.35f : 1.0f) * dt;
+    float step = kSteerRate * (drifting ? 1.35f : 1.0f) * steerMul * dt;
     steerAngle += clampf(target - steerAngle, -step, step);
     steerAngle = clampf(steerAngle, -0.6f, 0.6f);
 
@@ -309,8 +309,8 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
     } else if (reversing) {
         force -= input.brake * kReverseAccel;
     } else if (input.throttle > 0.0f && speed > -0.4f) {
-        float ratio = clampf(speed / kMaxSpeed, 0.0f, 1.0f);
-        force += input.throttle * kAccel * (1.0f - ratio * ratio);
+        float ratio = clampf(speed / (kMaxSpeed * topSpeedMul), 0.0f, 1.0f);
+        force += input.throttle * kAccel * powerMul * (1.0f - ratio * ratio);
     }
     force -= kDrag * speed * std::fabs(speed);
     if (std::fabs(speed) > 0.05f) {
@@ -487,3 +487,14 @@ Mat4 carModelMatrix(const Car& car, float pitch, float roll) {
     Vec3 up = normalize(cross(forward, right));
     return basis({car.x, car.y, car.z}, right, up, forward);
 }
+
+// 車種テーブル。0=バランス、1=ドリフト（曲がりやすく進入が鋭い）、
+// 2=スピード（最高速と出力が高い代わりに切れ角が小さく安定寄り）。
+const CarSpec kCarSpecs[3] = {
+    {"BALANCE", 1.00f, 1.00f, 1.00f,
+     DriftTuning{15.0f, 1.15f, 1.00f, 0.15f, 0.95f, 9.0f, 0.0f}},
+    {"DRIFT", 0.92f, 0.90f, 1.25f,
+     DriftTuning{15.0f, 0.80f, 0.90f, 0.12f, 1.15f, 9.0f, 0.85f}},
+    {"SPEED", 1.25f, 1.18f, 0.80f,
+     DriftTuning{17.0f, 1.50f, 1.10f, 0.18f, 0.70f, 9.0f, 0.0f}},
+};

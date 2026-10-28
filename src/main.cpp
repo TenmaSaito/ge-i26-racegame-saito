@@ -1,4 +1,5 @@
 #include "car.hpp"
+#include "scenery.hpp"
 #include "render.hpp"
 #include "track.hpp"
 
@@ -89,6 +90,16 @@ struct App {
     GpuMesh body;
     GpuMesh wheel;
     GpuMesh shadow;
+    GpuMesh lampsOff;
+    GpuMesh lampsOn;
+    GpuMesh lampsBright;
+    std::vector<GpuMesh> scenery;      // 景観チャンク（距離カリングして描く）
+    std::vector<Vec3> sceneryCenters;
+    int carSpec = 0;                   // 選択中の車種（1/2/3 キー）
+    float bodyRollSm = 0;              // 車体の傾き（平滑化済み）
+    float bodyPitchSm = 0;
+    struct TrailPoint { Vec3 pos; float age; };
+    std::vector<TrailPoint> trailL, trailR;  // ドリフト中のテールランプ軌跡
     Race race;
     Orbit camera;
     std::vector<SmokePuff> smoke;
@@ -487,6 +498,8 @@ void resetRace(App& app) {
     app.race = Race{};
     app.camera.ready = false;
     app.smoke.clear();
+    app.trailL.clear();
+    app.trailR.clear();
 }
 
 void tickRace(Race& race, float s, float length, float dt) {
@@ -787,6 +800,9 @@ void drawHud(App& app) {
     std::snprintf(line, sizeof(line), "BEST %s", best);
     hud.drawText(24, 90, 2.0f, line, 0.75f, 0.8f, 0.7f, 1);
 
+    std::snprintf(line, sizeof(line), "CAR %s  [1/2/3]", kCarSpecs[app.carSpec].name);
+    hud.drawText(24, 142, 2.0f, line, 0.8f, 0.85f, 0.9f, 1);
+
     int percent = static_cast<int>(app.car.ground.s / app.track.length * 100.0f);
     const char* corner = app.track.nameOf(app.car.ground.nameId);
     if (app.car.ground.corner > 0 && corner[0]) {
@@ -870,6 +886,93 @@ float carPitch(const App& app) {
     return std::atan2(ahead.centerY - behind.centerY, 4.8f);
 }
 
+
+// テールランプ（車体後端の小箱 2 つ）。色で点灯状態を切り替える。
+void buildTailLamps(CpuMesh& mesh, Vec3 color) {
+    for (int s = -1; s <= 1; s += 2) {
+        float cx = float(s) * 0.55f;
+        mesh.addBox({cx - 0.17f, 0.40f, -2.10f}, {cx + 0.17f, 0.53f, -2.04f}, color);
+    }
+}
+
+// 車種を適用する。特性の倍率と、その車の基準チューニングに切り替える。
+void applyCarSpec(App& app, int index) {
+    app.carSpec = index;
+    const CarSpec& spec = kCarSpecs[index];
+    app.car.powerMul = spec.powerMul;
+    app.car.topSpeedMul = spec.topSpeedMul;
+    app.car.steerMul = spec.steerMul;
+    driftTuning = spec.tuning;
+    clampTuning();
+    saveTuning();
+}
+
+Vec3 lampWorldPos(const App& app, float side) {
+    Vec3 fwd{std::sin(app.car.yaw), 0, std::cos(app.car.yaw)};
+    Vec3 right{fwd.z, 0, -fwd.x};
+    Vec3 p{app.car.x, app.car.y + 0.47f, app.car.z};
+    p = p + right * (side * 0.55f);
+    p = p + fwd * -2.1f;
+    return p;
+}
+
+// ドリフト中、テールランプの位置履歴を残す（長時間露光の光跡になる）。
+void updateTrails(App& app, float dt) {
+    for (auto* trail : {&app.trailL, &app.trailR}) {
+        for (auto& pt : *trail) pt.age += dt;
+        trail->erase(std::remove_if(trail->begin(), trail->end(),
+                                    [](const App::TrailPoint& pt) { return pt.age > 1.15f; }),
+                     trail->end());
+    }
+    if (app.car.drifting && app.car.driftAmount > 0.3f) {
+        const float sides[2] = {-1.0f, 1.0f};
+        std::vector<App::TrailPoint>* trails[2] = {&app.trailL, &app.trailR};
+        for (int i = 0; i < 2; ++i) {
+            Vec3 pos = lampWorldPos(app, sides[i]);
+            if (trails[i]->empty() || length(pos - trails[i]->back().pos) > 0.5f) {
+                trails[i]->push_back({pos, 0.0f});
+            }
+        }
+    }
+}
+
+void drawTrails(App& app) {
+    CpuMesh mesh;
+    Vec3 camDir = app.camera.look - app.camera.eye;
+    if (length(camDir) < 0.001f) return;
+    camDir = normalize(camDir);
+    std::vector<App::TrailPoint>* trails[2] = {&app.trailL, &app.trailR};
+    for (auto* trail : trails) {
+        for (size_t i = 1; i < trail->size(); ++i) {
+            const App::TrailPoint& a = (*trail)[i - 1];
+            const App::TrailPoint& b = (*trail)[i];
+            Vec3 seg = b.pos - a.pos;
+            if (length(seg) < 0.001f) continue;
+            // 幅方向は「進行方向 × 上」で取る。カメラ方向と交差させると
+            // 後方カメラで進行と視線が平行になり、帯が暴れてしまう。
+            Vec3 w = normalize(cross(seg, Vec3{0, 1, 0}));
+            const float hw = 0.085f;
+            auto col = [](float age) {
+                float f = clampf(1.0f - age / 1.15f, 0.0f, 1.0f);
+                return Vec3{1.9f * f, 0.16f * f, 0.16f * f};
+            };
+            Vec3 a0 = a.pos + w * -hw, a1 = a.pos + w * hw;
+            Vec3 b0 = b.pos + w * -hw, b1 = b.pos + w * hw;
+            // 2 三角形を色フェード付きで直接積む（addQuad は単色なので手書き）
+            auto tri = [&](Vec3 p, Vec3 q, Vec3 r, Vec3 c1, Vec3 c2, Vec3 c3) {
+                std::uint32_t base = std::uint32_t(mesh.vertices.size() / 9);
+                mesh.addVertex(p, {0, 1, 0}, c1);
+                mesh.addVertex(q, {0, 1, 0}, c2);
+                mesh.addVertex(r, {0, 1, 0}, c3);
+                mesh.addRawTriangle(base, base + 1, base + 2);
+            };
+            tri(a0, b0, b1, col(a.age), col(b.age), col(b.age));
+            tri(a0, b1, a1, col(a.age), col(b.age), col(a.age));
+        }
+    }
+    if (!mesh.vertices.empty()) app.renderer.drawDynamic(mesh);
+}
+
 void frame(void* userdata) {
     App& app = *static_cast<App*>(userdata);
     SDL_Event event;
@@ -901,6 +1004,9 @@ void frame(void* userdata) {
                 else if (code == SDL_SCANCODE_P) app.paused = !app.paused;
                 else if (code == SDL_SCANCODE_H) app.showHelp = !app.showHelp;
                 else if (code == SDL_SCANCODE_B) app.showDriftDebug = !app.showDriftDebug;
+                else if (code == SDL_SCANCODE_1) applyCarSpec(app, 0);
+                else if (code == SDL_SCANCODE_2) applyCarSpec(app, 1);
+                else if (code == SDL_SCANCODE_3) applyCarSpec(app, 2);
             }
         } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
             openPad(app);
@@ -963,6 +1069,7 @@ void frame(void* userdata) {
     }
     if (!app.paused) {
         updateSmoke(app, float(elapsed));
+        updateTrails(app, float(elapsed));
     }
     updateCamera(app, float(elapsed));
 
@@ -980,15 +1087,32 @@ void frame(void* userdata) {
 
     Mat4 identity;
     app.renderer.draw(app.course, identity);
+    // 景観はチャンク単位で距離カリング（1200m 以内だけ描く）。
+    for (size_t i = 0; i < app.scenery.size(); ++i) {
+        float dx = app.sceneryCenters[i].x - app.camera.eye.x;
+        float dz = app.sceneryCenters[i].z - app.camera.eye.z;
+        if (dx * dx + dz * dz < 1200.0f * 1200.0f) app.renderer.draw(app.scenery[i], identity);
+    }
     Mat4 shadow = mul(translation(app.car.x, app.car.y + 0.08f, app.car.z), rotationY(app.car.yaw));
     app.renderer.draw(app.shadow, shadow);
 
-    float pitch = carPitch(app);
-    // 路面のバンクに、横滑りの荷重で沈むロールを足す。
-    float roll = std::atan(app.car.ground.cross) -
-                 clampf(app.car.lateralSpeed * 0.010f, -0.12f, 0.12f);
-    Mat4 model = carModelMatrix(app.car, pitch, roll);
+    // 車体の傾きは荷重移動なので、目標へ一気に行かず少し遅れて追う
+    // （以前は横速度に即応してカクついて見えた）。
+    {
+        float pitchT = carPitch(app);
+        float rollT = std::atan(app.car.ground.cross) -
+                      clampf(app.car.lateralSpeed * 0.009f, -0.12f, 0.12f);
+        const float k = 1.0f - std::exp(-3.0f / 60.0f);
+        app.bodyPitchSm += (pitchT - app.bodyPitchSm) * k;
+        app.bodyRollSm += (rollT - app.bodyRollSm) * k;
+    }
+    Mat4 model = carModelMatrix(app.car, app.bodyPitchSm, app.bodyRollSm);
     app.renderer.draw(app.body, model);
+    // テールランプ: ブレーキで強点灯、ドリフト中は点灯、それ以外は消灯色。
+    const GpuMesh& lamps = app.lastInput.brake > 0.05f ? app.lampsBright
+                           : app.car.drifting        ? app.lampsOn
+                                                     : app.lampsOff;
+    app.renderer.draw(lamps, model);
     const float wheelX = 0.82f;
     const float wheelZ[2] = {1.42f, -1.38f};
     const float steerForWheel[2] = {app.car.steerAngle, 0};
@@ -1000,6 +1124,7 @@ void frame(void* userdata) {
         }
     }
     drawSmoke(app);
+    drawTrails(app);
     drawHud(app);
     SDL_GL_SwapWindow(app.window);
 
@@ -1296,6 +1421,23 @@ int main(int argc, char** argv) {
     }
     openPad(app);
     app.course = app.renderer.upload(app.track.visual);
+    {
+        // 景観（木・建物・ガードレール）はクラス側でチャンク分割して構築。
+        SceneryBuilder builder(app.track);
+        for (SceneryChunk& chunk : builder.build()) {
+            app.scenery.push_back(app.renderer.upload(chunk.mesh));
+            app.sceneryCenters.push_back(chunk.center);
+        }
+        CpuMesh lampMesh;
+        buildTailLamps(lampMesh, {0.22f, 0.03f, 0.03f});
+        app.lampsOff = app.renderer.upload(lampMesh);
+        lampMesh.vertices.clear(); lampMesh.indices.clear();
+        buildTailLamps(lampMesh, {1.15f, 0.10f, 0.10f});
+        app.lampsOn = app.renderer.upload(lampMesh);
+        lampMesh.vertices.clear(); lampMesh.indices.clear();
+        buildTailLamps(lampMesh, {2.6f, 0.22f, 0.20f});
+        app.lampsBright = app.renderer.upload(lampMesh);
+    }
     CpuMesh body;
     CpuMesh wheel;
     CpuMesh shadow;

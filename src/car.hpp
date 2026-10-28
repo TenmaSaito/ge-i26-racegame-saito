@@ -46,6 +46,11 @@ struct Car {
     bool onAsphalt = true;
     TrackPose ground;
 
+    // --- 車種ごとの特性（CarSpec から適用される倍率） ---------------------
+    float powerMul = 1.0f;     // エンジン出力
+    float topSpeedMul = 1.0f;  // 最高速
+    float steerMul = 1.0f;     // ステアの切れ角と応答
+
     // --- ドリフトの状態 -------------------------------------------------
     // 速度はスカラーではなくベクトルで持つ。車体が回っても速度ベクトルは
     // ワールドに残る（慣性）ので、進行方向と車体の向きがずれて横滑りする。
@@ -69,6 +74,18 @@ struct Car {
     // グリップ時は横速度を強く殺し、ドリフト時は殺しきれずに滑らせる。
     void stepDrift(float dt, const DriveInput& input);
 };
+
+// 選択できる車種。特性の倍率と、その車の基準ドリフトチューニングを持つ。
+struct CarSpec {
+    const char* name;  // HUD 表示名（英字）
+    float powerMul;
+    float topSpeedMul;
+    float steerMul;
+    DriftTuning tuning;
+};
+
+extern const CarSpec kCarSpecs[3];
+constexpr int kCarSpecCount = 3;
 
 void buildCarBody(CpuMesh& mesh);
 void buildCarWheel(CpuMesh& mesh);
