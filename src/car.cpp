@@ -440,7 +440,16 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
 
     float bankLimit = track.halfWidth + track.curbWidth;
     float bankLat = clampf(ground.lateral, -bankLimit, bankLimit);
-    y = ground.centerY + bankLat * ground.cross;
+    // 高さは路面へ即座に貼り付けない。最寄り区間の切り替わりで中心高が
+    // 段差状に飛ぶ坂があり、そのまま代入すると上下にガクつくので、
+    // 短い時定数（約 45ms）で追わせて段差だけを均す。
+    {
+        float targetY = ground.centerY + bankLat * ground.cross;
+        float k = 1.0f - std::exp(-22.0f * dt);
+        // 段差が大きい場所（標高データの継ぎ目など）では、指数追随だけだと
+        // 1 フレームで大きく動くので、上下速度にも上限を付けて数フレームに分ける。
+        y += clampf((targetY - y) * k, -18.0f * dt, 18.0f * dt);
+    }
     onAsphalt = std::fabs(ground.lateral) <= track.halfWidth + 0.15f;
 }
 
