@@ -363,7 +363,8 @@ PadPulse readBrowserPad(DriveInput& input) {
 }
 #endif
 
-DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& pulse) {
+DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& pulse,
+                     bool carDrifting) {
     const Uint8* keys = SDL_GetKeyboardState(nullptr);
     DriveInput input;
     if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) input.throttle = 1;
@@ -421,36 +422,32 @@ DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& puls
 #else
     (void)pulse;
 #endif
-    // --- マウスステアリング -------------------------------------------------
-    // 画面中央からの横ずれをアナログステアとして使う。キーボード/パッドの
-    // ステア入力がある間はそちらを優先。左ボタン=ドリフト、右ボタン=ブレーキ。
-    // マウスを一度も動かしていない間は無効で、動かしてから 4 秒だけ有効
-    // （画面端に置いたままで勝手に曲がらないように）。
-    static int lastMouseX = -1;
-    static Uint32 lastMouseMoveMs = 0;
-    static bool mouseMovedOnce = false;
+    // --- マウス = ドリフトスティック -----------------------------------------
+    // マウスで車体そのものは操作しない。ドリフトが始まった瞬間のマウス位置を
+    // 原点（スティックのニュートラル）として保存し、そこからの横方向のずれを
+    // ドリフトスティック（driftSteer）の倒し量として使う。原点に戻せば弱まり、
+    // 離すほどドリフトが強まる＝右スティック/矢印キーと同じ感覚になる。
+    // ドリフトしていない間はマウスは何もしない。
+    static bool mouseAnchorActive = false;
+    static int mouseAnchorX = 0;
     if (window) {
         int mx = 0;
         int my = 0;
-        const Uint32 buttons = SDL_GetMouseState(&mx, &my);
-        if (lastMouseX >= 0 && mx != lastMouseX) {
-            mouseMovedOnce = true;
-            lastMouseMoveMs = SDL_GetTicks();
-        }
-        lastMouseX = mx;
-        const bool buttonHeld = (buttons & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0;
-        if (mouseMovedOnce && (buttonHeld || SDL_GetTicks() - lastMouseMoveMs < 4000)) {
-            if (std::fabs(input.steer) < 0.05f) {
-                int ww = 0;
-                int wh = 0;
-                SDL_GetWindowSize(window, &ww, &wh);
-                if (ww > 0) {
-                    float rel = (float(mx) - ww * 0.5f) / (ww * 0.30f);
-                    input.steer = stickDead(clampf(rel, -1.0f, 1.0f));
-                }
+        SDL_GetMouseState(&mx, &my);
+        if (carDrifting) {
+            if (!mouseAnchorActive) {
+                mouseAnchorActive = true;
+                mouseAnchorX = mx;
             }
-            if (buttons & SDL_BUTTON_LMASK) input.drift = true;
-            if (buttons & SDL_BUTTON_RMASK) input.brake = 1;
+            int ww = 0;
+            int wh = 0;
+            SDL_GetWindowSize(window, &ww, &wh);
+            float scale = ww > 0 ? ww * 0.25f : 300.0f;
+            if (scale < 120.0f) scale = 120.0f;
+            float rel = (float)(mx - mouseAnchorX) / scale;
+            input.driftSteer += stickDead(clampf(rel, -1.0f, 1.0f));
+        } else {
+            mouseAnchorActive = false;
         }
     }
     input.throttle = clampf(input.throttle, 0, 1);
@@ -742,7 +739,7 @@ void drawHud(App& app) {
                      "PAD: RT ACCEL  LT BRAKE  L-STICK STEER  R-STICK OR B/LB/RB DRIFT  Y CAMERA",
                      0.75f, 0.8f, 0.84f, 1);
         hud.drawText(24, float(hud.height) - 30, 1.7f,
-                     "MOUSE: MOVE = STEER (ANALOG)  L-BUTTON = DRIFT  R-BUTTON = BRAKE",
+                     "MOUSE: DURING DRIFT, SLIDE FROM DRIFT-START POS = DRIFT STICK (FARTHER = MORE ANGLE)",
                      0.75f, 0.8f, 0.84f, 1);
     }
     hud.drawText(float(hud.width) - 250, float(hud.height) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
@@ -815,7 +812,7 @@ void frame(void* userdata) {
         }
     }
     PadPulse padPulse;
-    DriveInput input = readDrive(app.window, app.pad, padPulse);
+    DriveInput input = readDrive(app.window, app.pad, padPulse, app.car.drifting);
     app.lastInput = input;
 #ifdef __EMSCRIPTEN__
     // Chrome 拡張（extension/）などの外部ツールが localStorage の調整値を
