@@ -143,17 +143,32 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     float vl = velX * cosYaw - velZ * sinYaw;   // 横方向成分（右が正）
     vf += driveDelta;                           // 駆動力は車体前方へ足す
 
-    // --- グリップ: 横速度を指数減衰させる ---------------------------------
-    // 慣性（inertia）が大きいほど減衰が弱まり、速度ベクトルが向きを保つ。
+    // --- グリップ: 速度の向きを車体前方へ回す ------------------------------
+    // 横速度をそのまま捨てるモデルだと、滑るほど運動エネルギーを失って失速
+    // する（実測: アクセル全開のドリフト1.5秒で 120→57km/h、気持ちよくない）。
+    // 頭文字Dアーケードのドリフトは「速度を殺さず向きを変える」のが芯なので、
+    // グリップは速度ベクトルの大きさを保ったままスリップ角を指数減衰させる
+    // 回転として効かせる。減速は driftDecel と通常の抗力・抵抗だけが担う。
+    // 立ち上がりでは横滑り分が前方向へ変換されるため、自然に加速感が出る。
+    // 慣性（inertia）が大きいほど回転が弱まり、速度ベクトルが向きを保つ。
     float grip = driftTuning.gripNormal + (driftTuning.gripDrift - driftTuning.gripNormal) * driftAmount;
     grip /= std::max(0.05f, driftTuning.inertia);
     if (!onAsphalt) {
         grip *= 0.55f;  // 芝はもともと滑る
     }
-    vl *= std::exp(-grip * dt);
+    float mag = std::sqrt(vf * vf + vl * vl);
+    if (vf > 0.5f && mag > 0.01f) {
+        float turned = std::atan2(vl, vf) * std::exp(-grip * dt);
+        vf = mag * std::cos(turned);
+        vl = mag * std::sin(turned);
+    } else {
+        vl *= std::exp(-grip * dt);  // 後進・極低速時は従来通り横だけ消す
+    }
     if (drifting) {
         // ドリフト中の減速。ボタン・スティックを問わず、滑っている間ずっと効く。
-        vf -= vf * driftTuning.driftDecel * driftAmount * dt;
+        float keep = std::exp(-driftTuning.driftDecel * driftAmount * dt);
+        vf *= keep;
+        vl *= keep;
     }
 
     // --- 速度ベクトルを再構成して位置を進める ------------------------------
