@@ -1,7 +1,8 @@
 # Android Studio への移植手順
 
 このコードベースは、Android へ持っていく前提で層を分けてある。
-依存ライブラリは **SDL2 のみ**。画像・音声ライブラリ（SDL_image / SDL_mixer）は使っていない。
+依存ライブラリは **SDL 系のみ**（SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer）。
+いずれも SDL 公式の姉妹ライブラリで、Android でも同じ手順で取り込める。
 
 ## 構成の考え方
 
@@ -29,8 +30,9 @@
    （パッケージ名は任意。ツールチェーンは既定の CMake / NDK でよい）。
 2. **SDL2 の配置**: SDL2 のソース一式（公式配布の `SDL2-2.x.x`）を
    `app/src/main/cpp/SDL` に置き、`app/src/main/cpp/CMakeLists.txt` で
-   `add_subdirectory(SDL)` する。SDL の公式 android-project テンプレートを
-   土台にする方法でもよい。
+   `add_subdirectory(SDL)` する。SDL_image / SDL_mixer も同様に
+   それぞれのフォルダへ置いて `add_subdirectory` する。
+   SDL の公式 android-project テンプレートを土台にする方法でもよい。
 3. **ゲーム本体の配置**: このリポジトリの `src/` を
    `app/src/main/cpp/game/` に、`assets/` を
    `app/src/main/assets/` にコピーする。
@@ -45,7 +47,7 @@
        game/camera.cpp game/effects.cpp game/hud.cpp game/tuning.cpp
        game/carmodel.cpp game/track.cpp game/scenery.cpp game/car.cpp
        game/render.cpp game/selftest.cpp)
-   target_link_libraries(main SDL2 GLESv3 log)
+   target_link_libraries(main SDL2 SDL2_image SDL2_mixer GLESv3 log)
    ```
    ※ `selftest.cpp` は製品に不要なら外してよい（依存は car/track のみ）。
 5. **Activity**: SDL 付属の `SDLActivity` を使う。テンプレート側の
@@ -67,5 +69,7 @@
 - 復帰時: SDL が `SDL_APP_WILLENTERBACKGROUND` 等を送る。現状は
   イベントループで無視しているが、実害が出たら `game.cpp` の
   イベント処理でポーズに落とす。
-- 音: 現在は無音（音声ライブラリ自体を使っていない）。足す場合も
-  SDL 本体の音声 API か OpenSL ES を platform 層に足す方針にする。
+- 音とテクスチャ: SDL_mixer / SDL_image の初期化は platform 層で済ませてある
+  （`platform::createWindow`）。実際に鳴らす・貼る処理を足すときは、
+  ファイル読み込みを `platform::readTextFile` と同様の口に寄せ、
+  描画は render 層、再生は platform 層に置くのが分担として自然。

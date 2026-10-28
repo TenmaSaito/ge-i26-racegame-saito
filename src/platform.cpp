@@ -4,6 +4,8 @@
 //       メインループの駆動。OS や実行環境の違いはここで吸収する。
 // Android への移植: SDL2 が Android でも同じ API を提供するため、
 //       このファイルは原則そのまま使える（アセット読み込みは SDL_RWops）。
+// 依存: SDL2 本体に加え、テクスチャ読み込み用 SDL_image と
+//       音声用 SDL_mixer（どちらも SDL 公式の姉妹ライブラリで Android 対応）。
 // ============================================================================
 
 #include "platform.hpp"
@@ -11,6 +13,8 @@
 #include "game.hpp"
 
 #include <SDL.h>
+#include <SDL_image.h>
+#include <SDL_mixer.h>
 
 #include <cstdio>
 #include <fstream>
@@ -169,14 +173,25 @@ bool createWindowImpl(Game& app) {
 
 
 bool createWindow(Game& app) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
+    }
+    // テクスチャ (PNG) と音声 (OGG) の土台だけ先に用意しておく。
+    // 読み込み自体は今後の実装で platform の読み込み口から行う。
+    if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0) {
+        SDL_Log("IMG_Init failed: %s", IMG_GetError());
+    }
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) != 0) {
+        SDL_Log("Mix_OpenAudio failed: %s", Mix_GetError());
     }
     return createWindowImpl(app);
 }
 
 void destroyWindow(Game& app) {
+    Mix_CloseAudio();
+    Mix_Quit();
+    IMG_Quit();
     if (app.gl) {
         SDL_GL_DeleteContext(app.gl);
         app.gl = nullptr;
