@@ -33,6 +33,21 @@
     background: rgba(255,255,255,.12); border-radius: 999px; padding: 8px 18px; font-size: 14px;
   }
   button:hover { background: rgba(255,255,255,.22); }
+  #debugPanel {
+    width: min(1280px, 96vw, calc((100dvh - 250px) * 16 / 9));
+    margin: 8px auto 0; padding: 10px 16px 12px;
+    background: rgba(3, 12, 20, .78); border: 1px solid rgba(255,255,255,.16);
+    border-radius: 12px;
+  }
+  #debugPanel .dbg-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12.5px; letter-spacing: .12em; opacity: .9;
+  }
+  #debugPanel label { letter-spacing: 0; cursor: pointer; }
+  #debugText {
+    margin: 6px 0 0; font-family: ui-monospace, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.75; white-space: pre-wrap; color: #d7efff;
+  }
   .howto {
     width: min(1280px, 96vw); margin: 10px auto 34px; padding: 14px 18px;
     background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
@@ -56,13 +71,19 @@
   <button id="fs" type="button">全画面で遊ぶ</button>
 </div>
 
+<div id="debugPanel">
+  <div class="dbg-head"><span>DRIFT DEBUG</span><label><input type="checkbox" id="dbgToggle" checked> 表示</label></div>
+  <pre id="debugText">読み込み中…</pre>
+</div>
+
 <div class="howto">
   <b>操作</b><br>
   W / ↑：アクセル　S / ↓：ブレーキ　A・D：ステアリング<br>
   ドリフト：Space（または Shift / Ctrl）を押しながら A・D ／ 矢印キーを右スティック代わりに使うツインスティック方式も可<br>
   ドリフト中はマウスを横に動かすと、ドリフト開始位置からのずれで角度を調整できます<br>
   1 / 2 / 3：車種切替（BALANCE / DRIFT / SPEED）　C：カメラ（CHASE / CLOSE / FAR / DRIVER）<br>
-  T：ドリフト調整パネル　B：デバッグ表示　R：リセット　P：一時停止　F：全画面（切替）
+  T：ドリフト調整パネル　R：リセット　P：一時停止　F：全画面（切替）<br>
+  ドリフトのデバッグ情報は、ゲーム画面の下のパネルに表示されます
 </div>
 
 <script>
@@ -85,6 +106,13 @@
   canvasEl.addEventListener('click', function () { canvasEl.focus(); });
   // 全画面はゲーム側（SDL）に任せる。ページ側から強制すると
   // キャンバスと描画バッファが食い違って暗転するため、F キーを送る。
+  window.raceSetDebug = function (t) {
+    var el = document.getElementById('debugText');
+    if (el) el.textContent = t;
+  };
+  document.getElementById('dbgToggle').addEventListener('change', function (e) {
+    document.getElementById('debugText').style.display = e.target.checked ? '' : 'none';
+  });
   document.getElementById('fs').addEventListener('click', function () {
     canvasEl.focus();
     var opt = { key: 'f', code: 'KeyF', keyCode: 70, which: 70, bubbles: true, cancelable: true };

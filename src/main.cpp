@@ -4,6 +4,9 @@
 #include "track.hpp"
 
 #include <SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include <SDL_image.h>
 #include <SDL_mixer.h>
 
@@ -708,6 +711,39 @@ void drawMinimap(App& app) {
     app.renderer.drawLine(lx, ly, rx, ry, 2.0f, 0.9f, 0.2f, 0.18f, 1);
 }
 
+#ifdef __EMSCRIPTEN__
+// ブラウザ版のデバッグ表示はページ側のパネルに出す（画面をすっきりさせる）。
+// ページが window.raceSetDebug を定義していれば、約 12Hz で文字列を送る。
+void pushDebugToPage(App& app) {
+    static int counter = 0;
+    if ((counter++ % 5) != 0) return;
+    const Car& car = app.car;
+    const DriveInput& in = app.lastInput;
+    const char* why = "";
+    bool trying = in.drift || std::fabs(in.driftSteer) > 0.45f;
+    if (!car.drifting && trying) {
+        if (car.speed < 9.0f) {
+            why = "\nWHY: TOO SLOW - NEED 32 KM/H";
+        } else if (std::fabs(in.steer) < 0.2f && std::fabs(in.driftSteer) <= 0.45f) {
+            why = "\nWHY: NEED STEER OR STICK";
+        }
+    }
+    char buf[640];
+    std::snprintf(buf, sizeof(buf),
+                  "STATE: %s\nSLIP: %.0f DEG\nLAT V: %.1f M/S\nFWD V: %.1f M/S (%.0f KM/H)\n"
+                  "AMOUNT: %d %%\nCMD: %.2f\nIN: BTN %d STEER %.2f\nIN: DSTK %.2f MSE %.2f THR %.1f\n"
+                  "SCORE %d CHAIN %d M%s",
+                  car.drifting ? "DRIFT" : "GRIP", car.slipAngle * 57.29578f,
+                  car.lateralSpeed, car.speed, car.speed * 3.6f,
+                  static_cast<int>(std::lround(car.driftAmount * 100.0f)), car.driftCommand,
+                  in.drift ? 1 : 0, in.steer, in.driftSteer, in.mouseDrift, in.throttle,
+                  static_cast<int>(car.driftScore), static_cast<int>(car.driftChain), why);
+    EM_ASM({
+        if (window.raceSetDebug) window.raceSetDebug(UTF8ToString($0));
+    }, buf);
+}
+#endif
+
 // ドリフトのデバッグ表示（B キーで切替）。状態・角度・横速度・入力と、
 // ドリフトに入らないときの理由を右上に常時出す。走らなくても切り分けられる。
 void drawDriftDebug(App& app) {
@@ -890,6 +926,7 @@ void drawHud(App& app) {
     if (app.camera.mode == 3) camName = "DRIVER";
     hud.drawText(float(hud.width) - 140, 22, 2.0f, camName, 0.8f, 0.84f, 0.88f, 1);
 
+#ifndef __EMSCRIPTEN__
     if (app.showHelp) {
         hud.drawText(24, float(hud.height) - 102, 1.7f,
                      "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  F FULLSCREEN  P PAUSE  B DEBUG  T TUNE",
@@ -904,14 +941,19 @@ void drawHud(App& app) {
                      "MOUSE: DURING DRIFT, SLIDE FROM DRIFT-START POS = DRIFT STICK (FARTHER = MORE ANGLE)",
                      0.75f, 0.8f, 0.84f, 1);
     }
+#endif
     hud.drawText(float(hud.width) - 250, float(hud.height) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
     if (app.paused) {
         hud.drawText(float(hud.width) * 0.5f - 70, float(hud.height) * 0.45f, 5.0f, "PAUSE", 1, 0.95f, 0.9f, 1);
     }
     drawMinimap(app);
+#ifdef __EMSCRIPTEN__
+    pushDebugToPage(app);
+#else
     if (app.showDriftDebug) {
         drawDriftDebug(app);
     }
+#endif
     if (app.showTuning) {
         drawTuning(app);
     }
