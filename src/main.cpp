@@ -90,6 +90,7 @@ struct App {
     GpuMesh wheel;
     GpuMesh shadow;
     GpuMesh backdrop;
+    GpuMesh nose;
     float mmMinX = 0, mmMaxX = 0, mmMinZ = 0, mmMaxZ = 0;  // ミニマップ範囲のキャッシュ
     bool mmReady = false;
     GpuMesh lampsOff;
@@ -524,11 +525,24 @@ void tickRace(Race& race, float s, float length, float dt) {
 }
 
 void updateCamera(App& app, float dt) {
+    // ドライバーズアイ: 運転席の頭位置に固定。前を見る向きは車体の向き主体で、
+    // ドリフト時は進行方向へ少しだけ視線を逃がす。遅れ（ブレンド）は付けない。
+    if (app.camera.mode == 3) {
+        float heading = app.car.yaw + app.car.slipAngle * 0.25f * app.car.driftAmount;
+        Vec3 fw{std::sin(heading), 0, std::cos(heading)};
+        // 運転席の位置（キャビン上端より少し上）。デッキ面が視界の下部に
+        // フードとして入るくらいの高さにする。
+        Vec3 eye = Vec3{app.car.x, app.car.y, app.car.z} + fw * -0.2f + Vec3{0, 1.22f, 0};
+        app.camera.eye = eye;
+        app.camera.look = eye + fw * 10.0f + Vec3{0, -0.45f, 0};
+        app.camera.ready = true;
+        return;
+    }
     // 疾走感のため既定カメラをぐっと近づけた（後方 8.6→6.0m、高さ 3.3→2.3m）。
     // 車が大きく映り、路傍の木やガードレールが速く流れるようになる。
-    const float back[3] = {6.0f, 4.1f, 12.5f};
-    const float up[3] = {2.3f, 1.55f, 5.6f};
-    const float ahead[3] = {7.0f, 6.0f, 11.0f};
+    const float back[3] = {4.6f, 3.2f, 10.5f};
+    const float up[3] = {1.8f, 1.2f, 4.6f};
+    const float ahead[3] = {5.5f, 4.5f, 9.0f};
     int mode = app.camera.mode;
     // ドリフト中は車体の向きではなく進行方向寄りにカメラを向ける。
     // 車がカニ走りしても視線が置いていかれず、滑っている感じが伝わる。
@@ -860,6 +874,7 @@ void drawHud(App& app) {
     const char* camName = "CHASE";
     if (app.camera.mode == 1) camName = "CLOSE";
     if (app.camera.mode == 2) camName = "FAR";
+    if (app.camera.mode == 3) camName = "DRIVER";
     hud.drawText(float(hud.width) - 140, 22, 2.0f, camName, 0.8f, 0.84f, 0.88f, 1);
 
     if (app.showHelp) {
@@ -907,6 +922,15 @@ float carPitch(const App& app) {
     return std::atan2(ahead.centerY - behind.centerY, 4.8f);
 }
 
+
+// ドライバーズアイ用: 鼻先だけのメッシュ。本体全部を描くとデッキ面が
+// 視界の下半分を埋めてしまうので、前方クリップとスプリッタだけ見せる。
+void buildCarNose(CpuMesh& mesh) {
+    const Vec3 red{0.72f, 0.08f, 0.09f};
+    const Vec3 carbon{0.12f, 0.12f, 0.13f};
+    mesh.addBox({-0.7f, 0.32f, 1.7f}, {0.7f, 0.5f, 2.25f}, red);
+    mesh.addBox({-0.95f, 0.26f, 1.95f}, {0.95f, 0.36f, 2.35f}, carbon);
+}
 
 // テールランプ（車体後端の小箱 2 つ）。色で点灯状態を切り替える。
 void buildTailLamps(CpuMesh& mesh, Vec3 color) {
@@ -1021,7 +1045,7 @@ void frame(void* userdata) {
             } else if (!event.key.repeat) {
                 if (code == SDL_SCANCODE_ESCAPE) app.running = false;
                 else if (code == SDL_SCANCODE_R) reset = true;
-                else if (code == SDL_SCANCODE_C) app.camera.mode = (app.camera.mode + 1) % 3;
+                else if (code == SDL_SCANCODE_C) app.camera.mode = (app.camera.mode + 1) % 4;
                 else if (code == SDL_SCANCODE_P) app.paused = !app.paused;
                 else if (code == SDL_SCANCODE_H) app.showHelp = !app.showHelp;
                 else if (code == SDL_SCANCODE_B) app.showDriftDebug = !app.showDriftDebug;
@@ -1116,7 +1140,7 @@ void frame(void* userdata) {
         if (dx * dx + dz * dz < 1000.0f * 1000.0f) app.renderer.draw(app.scenery[i], identity);
     }
     Mat4 shadow = mul(translation(app.car.x, app.car.y + 0.08f, app.car.z), rotationY(app.car.yaw));
-    app.renderer.draw(app.shadow, shadow);
+    if (app.camera.mode != 3) app.renderer.draw(app.shadow, shadow);
 
     // 車体の傾きは荷重移動なので、目標へ一気に行かず少し遅れて追う
     // （以前は横速度に即応してカクついて見えた）。
@@ -1139,12 +1163,16 @@ void frame(void* userdata) {
     }
     Mat4 model = carModelMatrix(app.car, app.bodyPitchSm, app.bodyRollSm);
     model = mul(translation(0, 0.05f, 0), model);  // 平面に這わせた際の角のめり込み防止
-    app.renderer.draw(app.body, model);
-    // テールランプ: ブレーキで強点灯、ドリフト中は点灯、それ以外は消灯色。
-    const GpuMesh& lamps = app.lastInput.brake > 0.05f ? app.lampsBright
-                           : app.car.drifting        ? app.lampsOn
-                                                     : app.lampsOff;
-    app.renderer.draw(lamps, model);
+    if (app.camera.mode == 3) {
+        app.renderer.draw(app.nose, model);
+    } else {
+        app.renderer.draw(app.body, model);
+        // テールランプ: ブレーキで強点灯、ドリフト中は点灯、それ以外は消灯色。
+        const GpuMesh& lamps = app.lastInput.brake > 0.05f ? app.lampsBright
+                               : app.car.drifting        ? app.lampsOn
+                                                         : app.lampsOff;
+        app.renderer.draw(lamps, model);
+    }
     const float wheelX = 0.82f;
     const float wheelZ[2] = {1.42f, -1.38f};
     const float steerForWheel[2] = {app.car.steerAngle, 0};
@@ -1465,6 +1493,11 @@ int main(int argc, char** argv) {
             app.sceneryCenters.push_back(chunk.center);
         }
         app.backdrop = app.renderer.upload(builder.buildBackdrop());
+        {
+            CpuMesh noseMesh;
+            buildCarNose(noseMesh);
+            app.nose = app.renderer.upload(noseMesh);
+        }
         CpuMesh lampMesh;
         buildTailLamps(lampMesh, {0.22f, 0.03f, 0.03f});
         app.lampsOff = app.renderer.upload(lampMesh);
