@@ -57,6 +57,8 @@ struct App {
     bool running = true;
     bool paused = false;
     bool showHelp = true;
+    bool showDriftDebug = true;  // ドリフトのデバッグ表示（B キーで切替、既定はオン）
+    DriveInput lastInput;        // デバッグ表示用に直近の入力を覚えておく
     double accumulator = 0;
     Uint64 prevCounter = 0;
 };
@@ -360,6 +362,68 @@ void drawMinimap(App& app) {
     app.renderer.drawLine(lx, ly, rx, ry, 2.0f, 0.9f, 0.2f, 0.18f, 1);
 }
 
+// ドリフトのデバッグ表示（B キーで切替）。状態・角度・横速度・入力と、
+// ドリフトに入らないときの理由を右上に常時出す。走らなくても切り分けられる。
+void drawDriftDebug(App& app) {
+    Renderer& hud = app.renderer;
+    const Car& car = app.car;
+    const DriveInput& in = app.lastInput;
+    const float pw = 336.0f;
+    const float lineH = 21.0f;
+    const int lines = 11;
+    const float ph = 14.0f + lineH * float(lines);
+    const float px = float(hud.width) - pw - 16.0f;
+    const float py = 52.0f;
+    hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.72f);
+    float tx = px + 12.0f;
+    float ty = py + 8.0f;
+    char line[96];
+    hud.drawText(tx, ty, 1.6f, "DRIFT DEBUG", 0.85f, 0.88f, 0.92f, 1);
+    ty += lineH;
+    if (car.drifting) {
+        hud.drawText(tx, ty, 1.6f, "STATE: DRIFT", 1.0f, 0.62f, 0.2f, 1);
+    } else {
+        hud.drawText(tx, ty, 1.6f, "STATE: GRIP", 0.65f, 0.7f, 0.75f, 1);
+    }
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "SLIP: %.0f DEG", car.slipAngle * 57.29578f);
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "LAT V: %.1f M/S", car.lateralSpeed);
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "FWD V: %.1f M/S", car.speed);
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "AMOUNT: %d %%", static_cast<int>(std::lround(car.driftAmount * 100.0f)));
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "CMD: %.2f", car.driftCommand);
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "IN: BTN %d STEER %.2f", in.drift ? 1 : 0, in.steer);
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "IN: DSTICK %.2f THR %.1f", in.driftSteer, in.throttle);
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "SCORE %d CHAIN %d M",
+                  static_cast<int>(car.driftScore), static_cast<int>(car.driftChain));
+    hud.drawText(tx, ty, 1.6f, line, 1.0f, 0.8f, 0.45f, 1);
+    ty += lineH;
+    // ドリフト操作をしているのに入らないときは、理由を出す。
+    const char* why = "";
+    bool trying = in.drift || std::fabs(in.driftSteer) > 0.45f;
+    if (!car.drifting && trying) {
+        if (car.speed < 9.0f) {
+            why = "WHY: TOO SLOW - NEED 32 KM/H";
+        } else if (std::fabs(in.steer) < 0.2f && std::fabs(in.driftSteer) <= 0.45f) {
+            why = "WHY: NEED STEER OR STICK";
+        }
+    }
+    hud.drawText(tx, ty, 1.6f, why, 0.95f, 0.5f, 0.45f, 1);
+}
+
 void drawHud(App& app) {
     Renderer& hud = app.renderer;
     hud.beginHud();
@@ -395,14 +459,32 @@ void drawHud(App& app) {
     }
     hud.drawText(24, 116, 2.0f, line, 0.9f, 0.9f, 0.92f, 1);
 
-    // ドリフト表示: 角度とスコアと継続距離。滑っている間だけ出す。
+    // ドリフト表示: 走行中でも目に入るよう、画面中央上に大きく出す。
+    // 下のバーはスリップ角（中央が 0、左右に最大約60度）。
     if (app.car.drifting) {
         int deg = static_cast<int>(std::lround(std::fabs(app.car.slipAngle) * 57.29578f));
         std::snprintf(line, sizeof(line), "DRIFT %d DEG", deg);
-        hud.drawText(24, 142, 2.6f, line, 1.0f, 0.62f, 0.2f, 1);
+        float scale = 4.0f;
+        float textW = float(std::strlen(line)) * 6.0f * scale;
+        hud.drawText((float(hud.width) - textW) * 0.5f, 20, scale, line, 1.0f, 0.62f, 0.2f, 1);
+        float cx = float(hud.width) * 0.5f;
+        hud.addQuad(cx - 130, 58, cx + 130, 66, 0.02f, 0.03f, 0.05f, 0.6f);
+        float fill = clampf(app.car.slipAngle / 1.05f, -1.0f, 1.0f) * 130.0f;
+        float fx0 = fill < 0 ? cx + fill : cx;
+        float fx1 = fill < 0 ? cx : cx + fill;
+        hud.addQuad(fx0, 58, fx1, 66, 1.0f, 0.62f, 0.2f, 0.95f);
+        hud.addQuad(cx - 1.5f, 56, cx + 1.5f, 68, 0.95f, 0.96f, 0.98f, 0.9f);
         std::snprintf(line, sizeof(line), "SCORE %d  CHAIN %d M",
                       static_cast<int>(app.car.driftScore), static_cast<int>(app.car.driftChain));
-        hud.drawText(24, 172, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
+        float subW = float(std::strlen(line)) * 6.0f * 2.0f;
+        hud.drawText((float(hud.width) - subW) * 0.5f, 76, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
+    } else if (std::fabs(app.car.slipAngle) > 0.15f && app.car.speed > 5.0f) {
+        // ドリフト判定ではないが実際に滑っているとき（芝など）。
+        int deg = static_cast<int>(std::lround(std::fabs(app.car.slipAngle) * 57.29578f));
+        std::snprintf(line, sizeof(line), "SLIDE %d DEG", deg);
+        float scale = 3.0f;
+        float textW = float(std::strlen(line)) * 6.0f * scale;
+        hud.drawText((float(hud.width) - textW) * 0.5f, 22, scale, line, 0.95f, 0.85f, 0.3f, 1);
     }
 
     const char* camName = "CHASE";
@@ -412,7 +494,7 @@ void drawHud(App& app) {
 
     if (app.showHelp) {
         hud.drawText(24, float(hud.height) - 102, 1.7f,
-                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  P PAUSE",
+                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  P PAUSE  B DEBUG",
                      0.9f, 0.92f, 0.94f, 1);
         hud.drawText(24, float(hud.height) - 78, 1.7f,
                      "KEYBOARD TWIN-STICK: A/D STEER PLUS ARROW KEYS AS DRIFT STICK",
@@ -426,6 +508,9 @@ void drawHud(App& app) {
         hud.drawText(float(hud.width) * 0.5f - 70, float(hud.height) * 0.45f, 5.0f, "PAUSE", 1, 0.95f, 0.9f, 1);
     }
     drawMinimap(app);
+    if (app.showDriftDebug) {
+        drawDriftDebug(app);
+    }
     hud.flushHud();
 }
 
@@ -454,6 +539,7 @@ void frame(void* userdata) {
             else if (code == SDL_SCANCODE_C) app.camera.mode = (app.camera.mode + 1) % 3;
             else if (code == SDL_SCANCODE_P) app.paused = !app.paused;
             else if (code == SDL_SCANCODE_H) app.showHelp = !app.showHelp;
+            else if (code == SDL_SCANCODE_B) app.showDriftDebug = !app.showDriftDebug;
         } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
             openPad(app);
         } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && app.pad &&
@@ -468,6 +554,7 @@ void frame(void* userdata) {
     }
     PadPulse padPulse;
     DriveInput input = readDrive(app.pad, padPulse);
+    app.lastInput = input;
     if (padPulse.reset) reset = true;
     if (padPulse.pause) app.paused = !app.paused;
     if (padPulse.camera) app.camera.mode = (app.camera.mode + 1) % 3;
