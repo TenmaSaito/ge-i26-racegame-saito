@@ -54,6 +54,8 @@ struct Car {
     float driftAmount = 0;   // 0=フルグリップ、1=フルスライドへの遷移量
     float driftCommand = 0;  // 平滑化したドリフト操作（キーボードのオン/オフ入力でも角度を保てるように）
     float driftCharge = 0;   // フリック入力（大舵+アクセル）の蓄積秒
+    float driftHold = 0;     // 入力が一瞬途切れてもドリフトを維持する猶予（秒）
+    float driftCalm = 0;     // 滑りが収まって入力も無い状態が続いた時間（秒）
     float driftScore = 0;    // ドリフトの累計ポイント
     float driftChain = 0;    // いまのドリフトで滑り続けている距離（m）
     float driftBestChain = 0;

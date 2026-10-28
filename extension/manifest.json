@@ -1,0 +1,1 @@
+{"action":{"default_popup":"popup.html","default_title":"ドリフト調整"},"description":"racegame（ブラウザ版）のドリフト調整値を、ゲーム画面の外から日本語UIで変更します。変更は走行中でも即時反映されます。","manifest_version":3,"name":"レースゲーム ドリフト調整","permissions":["activeTab","scripting"],"version":"1.0.0"}

@@ -89,6 +89,7 @@ struct App {
     DriveInput lastInput;        // デバッグ表示用に直近の入力を覚えておく
     bool showTuning = false;     // ドリフトのチューニングパネル（T キーで開閉）
     int tuneIndex = 0;           // パネルで選択中の項目
+    int tuningPollTick = 0;      // ブラウザ版: 外部からの調整値変更を拾う間引きカウンタ
     double accumulator = 0;
     Uint64 prevCounter = 0;
 };
@@ -186,6 +187,10 @@ void clampTuning() {
     }
 }
 
+// ブラウザ版で最後に適用した調整値テキスト。Chrome 拡張など外部ツールが
+// localStorage を書き換えたとき、差分があれば走行中でもライブ反映する。
+std::string g_lastTuningText;
+
 std::string serializeTuning() {
     char buf[320];
     std::snprintf(buf, sizeof(buf),
@@ -219,6 +224,7 @@ void parseTuning(const char* text) {
 void saveTuning() {
     std::string data = serializeTuning();
 #ifdef __EMSCRIPTEN__
+    g_lastTuningText = data;
     tuningSaveJs(data.c_str());
 #else
     std::ofstream out("drift_tuning.txt", std::ios::trunc);
@@ -232,6 +238,7 @@ void loadTuning() {
 #ifdef __EMSCRIPTEN__
     char* p = tuningLoadJs();
     if (p) {
+        g_lastTuningText = p;
         parseTuning(p);
         std::free(p);
     }
@@ -356,7 +363,7 @@ PadPulse readBrowserPad(DriveInput& input) {
 }
 #endif
 
-DriveInput readDrive(SDL_GameController* pad, PadPulse& pulse) {
+DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& pulse) {
     const Uint8* keys = SDL_GetKeyboardState(nullptr);
     DriveInput input;
     if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) input.throttle = 1;
@@ -414,6 +421,38 @@ DriveInput readDrive(SDL_GameController* pad, PadPulse& pulse) {
 #else
     (void)pulse;
 #endif
+    // --- マウスステアリング -------------------------------------------------
+    // 画面中央からの横ずれをアナログステアとして使う。キーボード/パッドの
+    // ステア入力がある間はそちらを優先。左ボタン=ドリフト、右ボタン=ブレーキ。
+    // マウスを一度も動かしていない間は無効で、動かしてから 4 秒だけ有効
+    // （画面端に置いたままで勝手に曲がらないように）。
+    static int lastMouseX = -1;
+    static Uint32 lastMouseMoveMs = 0;
+    static bool mouseMovedOnce = false;
+    if (window) {
+        int mx = 0;
+        int my = 0;
+        const Uint32 buttons = SDL_GetMouseState(&mx, &my);
+        if (lastMouseX >= 0 && mx != lastMouseX) {
+            mouseMovedOnce = true;
+            lastMouseMoveMs = SDL_GetTicks();
+        }
+        lastMouseX = mx;
+        const bool buttonHeld = (buttons & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0;
+        if (mouseMovedOnce && (buttonHeld || SDL_GetTicks() - lastMouseMoveMs < 4000)) {
+            if (std::fabs(input.steer) < 0.05f) {
+                int ww = 0;
+                int wh = 0;
+                SDL_GetWindowSize(window, &ww, &wh);
+                if (ww > 0) {
+                    float rel = (float(mx) - ww * 0.5f) / (ww * 0.30f);
+                    input.steer = stickDead(clampf(rel, -1.0f, 1.0f));
+                }
+            }
+            if (buttons & SDL_BUTTON_LMASK) input.drift = true;
+            if (buttons & SDL_BUTTON_RMASK) input.brake = 1;
+        }
+    }
     input.throttle = clampf(input.throttle, 0, 1);
     input.brake = clampf(input.brake, 0, 1);
     input.steer = clampf(input.steer, -1, 1);
@@ -702,6 +741,9 @@ void drawHud(App& app) {
         hud.drawText(24, float(hud.height) - 54, 1.7f,
                      "PAD: RT ACCEL  LT BRAKE  L-STICK STEER  R-STICK OR B/LB/RB DRIFT  Y CAMERA",
                      0.75f, 0.8f, 0.84f, 1);
+        hud.drawText(24, float(hud.height) - 30, 1.7f,
+                     "MOUSE: MOVE = STEER (ANALOG)  L-BUTTON = DRIFT  R-BUTTON = BRAKE",
+                     0.75f, 0.8f, 0.84f, 1);
     }
     hud.drawText(float(hud.width) - 250, float(hud.height) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
     if (app.paused) {
@@ -773,8 +815,24 @@ void frame(void* userdata) {
         }
     }
     PadPulse padPulse;
-    DriveInput input = readDrive(app.pad, padPulse);
+    DriveInput input = readDrive(app.window, app.pad, padPulse);
     app.lastInput = input;
+#ifdef __EMSCRIPTEN__
+    // Chrome 拡張（extension/）などの外部ツールが localStorage の調整値を
+    // 書き換えたら、0.5 秒以内に走行へ反映する（画面外ツールのための受け口）。
+    if (++app.tuningPollTick >= 30) {
+        app.tuningPollTick = 0;
+        char* p = tuningLoadJs();
+        if (p) {
+            std::string current(p);
+            std::free(p);
+            if (current != g_lastTuningText) {
+                g_lastTuningText = current;
+                parseTuning(current.c_str());
+            }
+        }
+    }
+#endif
     if (app.showTuning) {
         input = DriveInput{};  // チューニング中は矢印キーを運転に使わない
     }

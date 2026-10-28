@@ -43,6 +43,8 @@ void Car::reset(const Track& track) {
     driftAmount = 0;
     driftCommand = 0;
     driftCharge = 0;
+    driftHold = 0;
+    driftCalm = 0;
     driftScore = 0;
     driftChain = 0;
     driftBestChain = 0;
@@ -89,19 +91,36 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     }
     const bool flick = driftCharge > 0.30f;
     const bool wantDrift = (input.drift && std::fabs(steerIn) > 0.2f) || twinActive || flick;
+    // ドリフト系の入力が何かあるか（ボタンだけ押している等も含む）。長い
+    // コーナーでは必要なステアが小さく wantDrift が切れがちで、そのたびに
+    // ドリフトが終わって「押して離して」の繰り返しになっていた。そのため
+    // 維持の判定はこちらを使い、ドリフトを「角度をダイヤルで調整できる
+    // 粘る状態」にする（入口の判定は従来どおり wantDrift）。
+    const bool anyDriftInput = input.drift || twinActive || flick;
+    if (wantDrift) {
+        driftHold = 0.4f;  // 入力が一瞬途切れても終わらない猶予
+    } else {
+        driftHold = std::max(0.0f, driftHold - dt);
+    }
     // 操作の主役（右スティック優先）。キーボードはオン/オフしかないので、そのまま
     // 使うと目標角度が跳ねてスピンしやすい。コマンドを平滑化して、デジタル入力
     // でも「浅く入って深める」ができるようにする（アナログ入力にはほぼ影響なし）。
+    // ドリフト中は、ボタンを押している限り小さいステアにも追随する。
     const float rawCommand = twinActive ? twinIn : steerIn;
-    const float commandTarget = wantDrift ? rawCommand : 0.0f;
+    const float commandTarget = (wantDrift || (drifting && anyDriftInput)) ? rawCommand : 0.0f;
     // コマンドの立ち上がり速度も進入の鋭さで変わる（鋭い車ほど即座に全開）。
     const float commandRate = 3.5f + 4.5f * driftTuning.entrySharp;
     driftCommand += clampf(commandTarget - driftCommand, -commandRate * dt, commandRate * dt);
     const float command = driftCommand;
     // 目標スリップ角は操作と逆符号になる:
     // 右へ切ると車体が右へ回り、速度は慣性で左に残るのでスリップ角は負。
+    // 大きさはコマンドに比例（倒した分だけ角度が付く）。さらに高速では
+    // 上限を絞る（速いコーナーで浅く安定して流せるように）。
+    const float velMag = std::sqrt(velX * velX + velZ * velZ);
+    const float speedCap = clampf(26.0f / std::max(velMag, 10.0f), 0.45f, 1.0f);
     const float targetSlip =
-        -(command > 0 ? 1.0f : -1.0f) * driftTuning.maxSlip * (0.45f + 0.55f * std::fabs(command));
+        -(command > 0 ? 1.0f : -1.0f) * driftTuning.maxSlip *
+        std::pow(std::fabs(command), 0.8f) * speedCap;
 
     if (!drifting && wantDrift && speed > driftTuning.minSpeed) {
         drifting = true;
@@ -109,7 +128,19 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     if (drifting && speed < 3.5f) {
         drifting = false;
     }
-    if (drifting && !wantDrift && std::fabs(slipAngle) < 0.10f && std::fabs(lateralSpeed) < 1.5f) {
+    // 終了判定: 入力が全く無い状態で滑りが収まったら終わる。ボタン保持中は
+    // 終わらない（角度はコマンドで調整する）。ただし保持中でも、滑りが
+    // ほぼ無くコマンドも無い状態が続けば自然に終わる（直線でベタつかない）。
+    if (std::fabs(slipAngle) < 0.08f && std::fabs(command) < 0.05f) {
+        driftCalm += dt;
+    } else {
+        driftCalm = 0;
+    }
+    if (drifting && !anyDriftInput && driftHold <= 0.0f &&
+        std::fabs(slipAngle) < 0.10f && std::fabs(lateralSpeed) < 1.5f) {
+        drifting = false;
+    }
+    if (drifting && anyDriftInput && !twinActive && driftCalm > 0.6f) {
         drifting = false;
     }
     // グリップ量は急に切り替えず滑らかに移す。入るときの速さは進入の鋭さで
@@ -127,7 +158,7 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     yawRate += steerAngle * 0.9f * slow;
     if (driftAmount > 0.01f && (velX != 0.0f || velZ != 0.0f)) {
         const float velAngle = std::atan2(velX, velZ);  // 進行方向（yaw と同じ測り方）
-        if (wantDrift) {
+        if (anyDriftInput || driftHold > 0.0f) {
             // 目標スリップ角になる車体の向きへ回す追加ヨー。進入の鋭さが低いと
             // ゲインも上限も下がり、車体が一気に回らず角度がじわりと付く
             // （鋭い設定では Inertial Drift のように切った瞬間に跳ねる）。
