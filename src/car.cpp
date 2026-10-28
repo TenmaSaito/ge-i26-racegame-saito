@@ -33,6 +33,8 @@ void Car::reset(const Track& track) {
     yaw = track.spawnYaw;
     speed = 0;
     steerAngle = 0;
+    steerSm = 0;
+    driftLockout = 0;
     wheelSpin = 0;
     brakeHold = 0;
     velX = 0;
@@ -145,7 +147,8 @@ void Car::stepDrift(float dt, const DriveInput& input) {
         }
     }
 
-    if (!drifting && wantDrift && speed > driftTuning.minSpeed) {
+    if (driftLockout > 0.0f) driftLockout -= dt;
+    if (!drifting && wantDrift && speed > driftTuning.minSpeed && driftLockout <= 0.0f) {
         drifting = true;
     }
     if (drifting && speed < 3.5f) {
@@ -289,8 +292,15 @@ void Car::stepDrift(float dt, const DriveInput& input) {
 
 void Car::update(float dt, const DriveInput& input, const Track& track) {
     // ドリフト中はカウンターステアが要るので、切れ角と応答を少し広げる。
+    // キーボードのデジタル入力は段差がそのままヨーに伝わってカクつくので、
+    // 入力自体をなだらかにする。ドリフト中はカウンターを速く効かせたいので速め。
+    {
+        float steerRate = drifting ? 8.0f : 5.0f;
+        steerSm += clampf(clampf(input.steer, -1.0f, 1.0f) - steerSm,
+                          -steerRate * dt, steerRate * dt);
+    }
     float steerMax = maxSteerAt(speed) * (drifting ? 1.3f : 1.0f) * steerMul;
-    float target = clampf(input.steer, -1.0f, 1.0f) * steerMax;
+    float target = steerSm * steerMax;
     float step = kSteerRate * (drifting ? 1.35f : 1.0f) * steerMul * dt;
     steerAngle += clampf(target - steerAngle, -step, step);
     steerAngle = clampf(steerAngle, -0.6f, 0.6f);
@@ -391,6 +401,16 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
         if (outVel > 4.0f) {
             velX *= 0.55f;
             velZ *= 0.55f;
+            // 壁に強く当たったらドリフトは即終了。グリップを取り戻さないと
+            // ドリフトのまま壁に張り付いて動けなくなるため、遷移量も
+            // 一気に下げ、少しの間は再突入も止める。
+            if (drifting || driftAmount > 0.05f) {
+                drifting = false;
+                driftAmount = std::min(driftAmount, 0.1f);
+                driftCommand = 0;
+                driftHold = 0;
+                driftLockout = 0.6f;
+            }
         }
         float velMag = std::sqrt(velX * velX + velZ * velZ);
         if (velMag > 1.0f) {

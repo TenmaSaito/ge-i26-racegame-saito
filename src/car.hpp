@@ -63,6 +63,8 @@ struct Car {
     float driftCommand = 0;  // 平滑化したドリフト操作（キーボードのオン/オフ入力でも角度を保てるように）
     float driftHold = 0;     // 入力が一瞬途切れてもドリフトを維持する猶予（秒）
     float driftCalm = 0;     // 滑りが収まって入力も無い状態が続いた時間（秒）
+    float driftLockout = 0;  // 壁に強く当たった直後はドリフトに入れない時間（秒）
+    float steerSm = 0;       // 平滑化したステア入力（デジタル入力のカクつき防止）
     float driftScore = 0;    // ドリフトの累計ポイント
     float driftChain = 0;    // いまのドリフトで滑り続けている距離（m）
     float driftBestChain = 0;
