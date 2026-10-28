@@ -6,7 +6,8 @@
 #include <cstdint>
 #include <cstring>
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+// ブラウザ (WebGL2) と Android は OpenGL ES 3 が共通の土台。
 #include <GLES3/gl3.h>
 #else
 #define GL_GLEXT_PROTOTYPES 1
@@ -17,7 +18,7 @@
 namespace {
 
 const char* kVersion =
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
     "#version 300 es\nprecision highp float;\n";
 #else
     "#version 330 core\n";

@@ -23,12 +23,34 @@ endif()
 
 message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 
+# ソース構成（役割ごとに分割。詳細は各ファイル先頭のコメントを参照）:
+#   main.cpp     エントリポイント（起動の段取りだけ）
+#   platform.cpp プラットフォーム層（窓・GL・ファイル・保存・ループ）※SDL2 依存はここ
+#   game.cpp     ゲーム進行の統括（初期化と 1 フレームの段取り）
+#   input.cpp    入力層（キー/パッド/マウス → DriveInput）
+#   camera.cpp   カメラ層
+#   effects.cpp  演出層（煙・光跡）
+#   hud.cpp      画面表示 (HUD) 層
+#   tuning.cpp   ドリフト調整値（表と保存形式）
+#   carmodel.cpp 車体モデル（追加形状と車種）
+#   car/track/scenery/render  ロジックと描画（SDL 非依存を維持）
+#   selftest.cpp 自己検証（--self-test）
+# 依存ライブラリは SDL2 のみ（画像・音声ライブラリは使っていない）。
 add_executable(racegame
     src/main.cpp
+    src/platform.cpp
+    src/game.cpp
+    src/input.cpp
+    src/camera.cpp
+    src/effects.cpp
+    src/hud.cpp
+    src/tuning.cpp
+    src/carmodel.cpp
     src/track.cpp
     src/scenery.cpp
     src/car.cpp
     src/render.cpp
+    src/selftest.cpp
 )
 
 set(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")
@@ -49,12 +71,9 @@ if(EMSCRIPTEN)
         set(SINGLE_FILE_FLAG "")
     endif()
 
+    # SDL2 本体のみ（画像・音声の追加ライブラリには依存しない）。
     set(EMSCRIPTEN_SDL_FLAGS
         "-sUSE_SDL=2"
-        "-sUSE_SDL_IMAGE=2"
-        "-sSDL2_IMAGE_FORMATS=['png']"
-        "-sUSE_SDL_MIXER=2"
-        "-sSDL2_MIXER_FORMATS=['ogg']"
     )
 
     set(DEBUG_INFO_FORMAT "DWARF" CACHE STRING "Debug info format for Debug builds (DWARF or SOURCE_MAP)")
@@ -114,13 +133,9 @@ else()
     find_package(PkgConfig REQUIRED)
     find_package(OpenGL REQUIRED)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
-    pkg_check_modules(SDL2_IMAGE REQUIRED IMPORTED_TARGET SDL2_image)
-    pkg_check_modules(SDL2_MIXER REQUIRED IMPORTED_TARGET SDL2_mixer)
 
     target_link_libraries(racegame PRIVATE
         PkgConfig::SDL2
-        PkgConfig::SDL2_IMAGE
-        PkgConfig::SDL2_MIXER
         OpenGL::GL
     )
 

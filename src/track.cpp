@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <sstream>
 
 namespace {
@@ -243,11 +242,8 @@ void addGround(CpuMesh& mesh, const Track& track) {
 
 }  // namespace
 
-bool Track::load(const std::string& path) {
-    std::ifstream in(path);
-    if (!in) {
-        return false;
-    }
+bool Track::loadFromText(const std::string& text) {
+    std::istringstream in(text);
 
     enum class Mode { Top, Names, Samples, Pit };
     Mode mode = Mode::Top;

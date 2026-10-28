@@ -47,7 +47,9 @@ struct Track {
     std::vector<CpuMesh> visualChunks;  // 路面メッシュ（区間分割、描画カリング用）
     std::vector<Vec3> visualCenters;
 
-    bool load(const std::string& path);
+    // コース定義テキストから読み込む。ファイル読み込みは呼び出し側
+    // （platform::readTextFile）の担当で、この層は形式の解釈だけを行う。
+    bool loadFromText(const std::string& text);
     // preferS が 0 以上のときは、その周回位置に近い路面を優先する。立体交差で上下を取り違えない。
     TrackPose query(float x, float z, float yHint, float preferS = -1.0f) const;
     float wallLateral() const { return halfWidth + curbWidth + runoff; }
