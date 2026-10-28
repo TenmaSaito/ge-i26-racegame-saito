@@ -218,6 +218,17 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
         minZ = std::min(minZ, s.z); maxZ = std::max(maxZ, s.z);
         minY = std::min(minY, s.y);
     }
+    // 地面の大きな一枚板（路面チャンク側から移設。常時描く）。
+    {
+        const float pad = 120.0f;
+        const float gy = minY - 4.0f;
+        const Vec3 gcol{0.12f, 0.27f, 0.11f};
+        Vec3 a{minX - pad, gy, minZ - pad};
+        Vec3 b{maxX + pad, gy, minZ - pad};
+        Vec3 c{maxX + pad, gy, maxZ + pad};
+        Vec3 d{minX - pad, gy, maxZ + pad};
+        mesh.addQuad(a, d, c, b, {0, 1, 0}, gcol);
+    }
     const Vec3 center{(minX + maxX) * 0.5f, 0, (minZ + maxZ) * 0.5f};
     const float baseRadius = std::max(maxX - minX, maxZ - minZ) * 0.5f;
     const int seg = 72;

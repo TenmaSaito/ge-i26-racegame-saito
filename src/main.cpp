@@ -86,7 +86,6 @@ struct App {
     Renderer renderer;
     Track track;
     Car car;
-    GpuMesh course;
     GpuMesh body;
     GpuMesh wheel;
     GpuMesh shadow;
@@ -800,7 +799,7 @@ void drawHud(App& app) {
     hud.drawText(24, 22, 4.0f, line, 0.95f, 0.96f, 0.98f, 1);
 
     std::snprintf(line, sizeof(line), "FPS %d", int(std::lround(app.fpsSm)));
-    hud.drawText(float(app.renderer.width) - 118.0f, 22, 2.2f, line, 0.85f, 0.88f, 0.92f, 1);
+    hud.drawText(float(app.renderer.width) - 118.0f, float(app.renderer.height) - 56.0f, 2.2f, line, 0.85f, 0.88f, 0.92f, 1);
 
     if (!app.race.timing) {
         std::snprintf(line, sizeof(line), "OUT LAP");
@@ -1104,18 +1103,17 @@ void frame(void* userdata) {
     app.renderer.drawSky();
 
     float aspect = float(drawableW) / float(drawableH > 0 ? drawableH : 1);
-    Mat4 proj = perspective(60.0f * 3.14159265f / 180.0f, aspect, 0.15f, 4000.0f);
+    Mat4 proj = perspective(60.0f * 3.14159265f / 180.0f, aspect, 0.15f, 2200.0f);
     Mat4 view = lookAt(app.camera.eye, app.camera.look, {0, 1, 0});
     app.renderer.beginWorld(mul(proj, view), app.camera.eye);
 
     Mat4 identity;
-    app.renderer.draw(app.course, identity);
     app.renderer.draw(app.backdrop, identity);
     // 景観はチャンク単位で距離カリング（1200m 以内だけ描く）。
     for (size_t i = 0; i < app.scenery.size(); ++i) {
         float dx = app.sceneryCenters[i].x - app.camera.eye.x;
         float dz = app.sceneryCenters[i].z - app.camera.eye.z;
-        if (dx * dx + dz * dz < 1200.0f * 1200.0f) app.renderer.draw(app.scenery[i], identity);
+        if (dx * dx + dz * dz < 1000.0f * 1000.0f) app.renderer.draw(app.scenery[i], identity);
     }
     Mat4 shadow = mul(translation(app.car.x, app.car.y + 0.08f, app.car.z), rotationY(app.car.yaw));
     app.renderer.draw(app.shadow, shadow);
@@ -1454,7 +1452,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     openPad(app);
-    app.course = app.renderer.upload(app.track.visual);
+    // 路面チャンクも景観チャンクと同じリストでカリング描画する。
+    for (size_t i = 0; i < app.track.visualChunks.size(); ++i) {
+        app.scenery.push_back(app.renderer.upload(app.track.visualChunks[i]));
+        app.sceneryCenters.push_back(app.track.visualCenters[i]);
+    }
     {
         // 景観（木・建物・ガードレール）はクラス側でチャンク分割して構築。
         SceneryBuilder builder(app.track);

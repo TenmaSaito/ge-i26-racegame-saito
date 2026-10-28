@@ -44,7 +44,8 @@ struct Track {
     float spawnYaw = 0;
     std::vector<TrackSample> samples;
     std::vector<std::string> names;
-    CpuMesh visual;
+    std::vector<CpuMesh> visualChunks;  // 路面メッシュ（区間分割、描画カリング用）
+    std::vector<Vec3> visualCenters;
 
     bool load(const std::string& path);
     // preferS が 0 以上のときは、その周回位置に近い路面を優先する。立体交差で上下を取り違えない。

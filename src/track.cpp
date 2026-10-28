@@ -47,9 +47,9 @@ Vec3 onRoad(const Track& track, int index, float lateral) {
     };
 }
 
-void addRibbon(CpuMesh& mesh, const Track& track, float lat0, float lat1, Vec3 color, bool flatOuter) {
+void addRibbon(CpuMesh& mesh, const Track& track, float lat0, float lat1, Vec3 color, bool flatOuter, int from, int to) {
     const int n = static_cast<int>(track.samples.size());
-    for (int i = 0; i < n; ++i) {
+    for (int i = from; i < to; ++i) {
         int j = (i + 1) % n;
         Vec3 a = onRoad(track, i, lat0);
         Vec3 b = onRoad(track, i, lat1);
@@ -77,7 +77,7 @@ void addRibbon(CpuMesh& mesh, const Track& track, float lat0, float lat1, Vec3 c
     }
 }
 
-void addWalls(CpuMesh& mesh, const Track& track) {
+void addWalls(CpuMesh& mesh, const Track& track, int from, int to) {
     const int n = static_cast<int>(track.samples.size());
     const float inner = track.wallLateral();
     const float outer = inner + 0.4f;
@@ -85,7 +85,7 @@ void addWalls(CpuMesh& mesh, const Track& track) {
     const Vec3 concrete{0.62f, 0.63f, 0.66f};
     for (int side = -1; side <= 1; side += 2) {
         float sign = float(side);
-        for (int i = 0; i < n; ++i) {
+        for (int i = from; i < to; ++i) {
             int j = (i + 1) % n;
             Vec3 a = onRoad(track, i, sign * inner);
             Vec3 b = onRoad(track, j, sign * inner);
@@ -110,7 +110,7 @@ void addWalls(CpuMesh& mesh, const Track& track) {
 }
 
 
-void addCurbs(CpuMesh& mesh, const Track& track) {
+void addCurbs(CpuMesh& mesh, const Track& track, int from, int to) {
     const int n = static_cast<int>(track.samples.size());
     const Vec3 red{0.75f, 0.09f, 0.08f};
     const Vec3 white{0.90f, 0.90f, 0.92f};
@@ -118,7 +118,7 @@ void addCurbs(CpuMesh& mesh, const Track& track) {
         float sign = float(side);
         float inner = sign * track.halfWidth;
         float outer = sign * (track.halfWidth + track.curbWidth);
-        for (int i = 0; i < n; ++i) {
+        for (int i = from; i < to; ++i) {
             int j = (i + 1) % n;
             bool paint = (static_cast<int>(track.samples[i].s / 3.0f) % 2) == 0;
             Vec3 color = paint ? red : white;
@@ -340,20 +340,35 @@ bool Track::load(const std::string& path) {
         length += std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
     }
 
-    visual = CpuMesh{};
-    addGround(visual, *this);
-    const float curbOuter = halfWidth + curbWidth;
-    const float grassOuter = curbOuter + runoff;
-    addRibbon(visual, *this, -grassOuter, -curbOuter, {0.15f, 0.36f, 0.14f}, true);
-    addRibbon(visual, *this, curbOuter, grassOuter, {0.15f, 0.36f, 0.14f}, true);
-    // 木を植える帯。壁の外側に少し暗い芝を伸ばし、その上に木を並べる。
-    addRibbon(visual, *this, -(grassOuter + 30.0f), -grassOuter, {0.11f, 0.28f, 0.11f}, true);
-    addRibbon(visual, *this, grassOuter, grassOuter + 30.0f, {0.11f, 0.28f, 0.11f}, true);
-    addRibbon(visual, *this, -halfWidth, halfWidth, {0.17f, 0.17f, 0.19f}, false);
-    addCurbs(visual, *this);
-    addWalls(visual, *this);
-    addPit(visual, pit);
-    addStartLine(visual, *this);
+    // 路面メッシュも景観と同じ 120 サンプル単位のチャンクに分ける。
+    // 遠くのチャンクは描画自体を省けるので、頂点処理が大幅に減る。
+    // （地面の大きな一枚板は backdrop 側で常時描く。）
+    visualChunks.clear();
+    visualCenters.clear();
+    {
+        const int n = static_cast<int>(samples.size());
+        const int per = 120;
+        const float curbOuter = halfWidth + curbWidth;
+        const float grassOuter = curbOuter + runoff;
+        for (int from = 0; from < n; from += per) {
+            const int to = std::min(n, from + per);
+            CpuMesh chunk;
+            addRibbon(chunk, *this, -grassOuter, -curbOuter, {0.15f, 0.36f, 0.14f}, true, from, to);
+            addRibbon(chunk, *this, curbOuter, grassOuter, {0.15f, 0.36f, 0.14f}, true, from, to);
+            addRibbon(chunk, *this, -(grassOuter + 30.0f), -grassOuter, {0.11f, 0.28f, 0.11f}, true, from, to);
+            addRibbon(chunk, *this, grassOuter, grassOuter + 30.0f, {0.11f, 0.28f, 0.11f}, true, from, to);
+            addRibbon(chunk, *this, -halfWidth, halfWidth, {0.17f, 0.17f, 0.19f}, false, from, to);
+            addCurbs(chunk, *this, from, to);
+            addWalls(chunk, *this, from, to);
+            if (from == 0) {
+                addPit(chunk, pit);
+                addStartLine(chunk, *this);
+            }
+            visualChunks.push_back(std::move(chunk));
+            const TrackSample& mid = samples[size_t((from + to) / 2)];
+            visualCenters.push_back({mid.x, mid.y, mid.z});
+        }
+    }
     return true;
 }
 
