@@ -35,6 +35,17 @@ EM_JS(char*, tuningLoadJs, (), {
         return p;
     } catch (e) { return 0; }
 });
+// コース選択は URL の ?track=<名前> で受ける（例: racegame.html?track=flow）。
+EM_JS(char*, trackQueryJs, (), {
+    try {
+        const s = new URLSearchParams(location.search).get('track');
+        if (!s) return 0;
+        const n = lengthBytesUTF8(s) + 1;
+        const p = _malloc(n);
+        stringToUTF8(s, p, n);
+        return p;
+    } catch (e) { return 0; }
+});
 #endif
 
 namespace {
@@ -58,6 +69,7 @@ struct Orbit {
 };
 
 struct App {
+    std::string title = "Suzuka Circuit";  // ウィンドウタイトル（コース名）
     SDL_Window* window = nullptr;
     SDL_GLContext gl = nullptr;
     SDL_GameController* pad = nullptr;
@@ -81,19 +93,59 @@ struct App {
     Uint64 prevCounter = 0;
 };
 
-std::string findTrackPath() {
-    const char* paths[] = {
-        "assets/track/suzuka.txt",
-        "../assets/track/suzuka.txt",
-        "/assets/track/suzuka.txt",
+// コース名（ファイル名から .txt を除いたもの）からパスを探す。
+// 既定は suzuka。ネイティブは --track <名前>、ブラウザは ?track=<名前> で切替。
+std::string findTrackPath(const std::string& stem) {
+    const std::string file = stem + ".txt";
+    const std::string paths[] = {
+        "assets/track/" + file,
+        "../assets/track/" + file,
+        "/assets/track/" + file,
     };
-    for (const char* path : paths) {
+    for (const std::string& path : paths) {
         std::ifstream in(path);
         if (in) {
             return path;
         }
     }
     return paths[0];
+}
+
+// コース名はパストラバーサル防止に英数字と _- のみ許可する。
+std::string sanitizeTrackStem(const char* raw) {
+    std::string out;
+    if (!raw) {
+        return out;
+    }
+    for (const char* p = raw; *p && out.size() < 32; ++p) {
+        const char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+            out += c;
+        }
+    }
+    return out;
+}
+
+std::string pickTrackStem(int argc, char** argv) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--track") == 0) {
+            std::string stem = sanitizeTrackStem(argv[i + 1]);
+            if (!stem.empty()) {
+                return stem;
+            }
+        }
+    }
+#ifdef __EMSCRIPTEN__
+    char* p = trackQueryJs();
+    if (p) {
+        std::string stem = sanitizeTrackStem(p);
+        std::free(p);
+        if (!stem.empty()) {
+            return stem;
+        }
+    }
+#endif
+    return "suzuka";
 }
 
 void formatTime(char* buf, int size, float seconds) {
@@ -124,6 +176,7 @@ TuneItem tuneItems[] = {
     {"MAX SLIP", &driftTuning.maxSlip, 0.35f, 1.25f, 0.035f, 1},
     {"MIN SPEED", &driftTuning.minSpeed, 0.0f, 25.0f, 1.0f, 2},
     {"NORMAL GRIP", &driftTuning.gripNormal, 6.0f, 30.0f, 0.5f, 3},
+    {"ENTRY", &driftTuning.entrySharp, 0.0f, 1.0f, 0.05f, 3},
 };
 constexpr int kTuneItemCount = static_cast<int>(sizeof(tuneItems) / sizeof(tuneItems[0]));
 
@@ -136,9 +189,10 @@ void clampTuning() {
 std::string serializeTuning() {
     char buf[320];
     std::snprintf(buf, sizeof(buf),
-                  "gripNormal=%.3f gripDrift=%.3f inertia=%.3f driftDecel=%.3f maxSlip=%.3f minSpeed=%.3f",
+                  "gripNormal=%.3f gripDrift=%.3f inertia=%.3f driftDecel=%.3f maxSlip=%.3f minSpeed=%.3f entry=%.3f",
                   driftTuning.gripNormal, driftTuning.gripDrift, driftTuning.inertia,
-                  driftTuning.driftDecel, driftTuning.maxSlip, driftTuning.minSpeed);
+                  driftTuning.driftDecel, driftTuning.maxSlip, driftTuning.minSpeed,
+                  driftTuning.entrySharp);
     return buf;
 }
 
@@ -158,6 +212,7 @@ void parseTuning(const char* text) {
     get("driftDecel", driftTuning.driftDecel);
     get("maxSlip", driftTuning.maxSlip);
     get("minSpeed", driftTuning.minSpeed);
+    get("entry", driftTuning.entrySharp);
     clampTuning();
 }
 
@@ -864,7 +919,7 @@ int driftTest(const Track& track) {
     return 0;
 }
 
-int selfTest(const Track& track) {
+int selfTest(const Track& track, float minLength, float maxLength) {
     int driftResult = driftTest(track);
     if (driftResult != 0) {
         return driftResult;
@@ -932,7 +987,7 @@ int selfTest(const Track& track) {
     }
     std::printf("self-test length %.0f travelled %.0f maxLat %.1f speed %.1f km/h\n",
                 track.length, travelled, maxLat, car.speed * 3.6f);
-    if (track.length < 5200.0f || track.length > 6500.0f) return 2;
+    if (track.length < minLength || track.length > maxLength) return 2;
     if (travelled < 1200.0f) return 3;
     if (maxLat > 30.0f) return 4;
     return 0;
@@ -950,7 +1005,7 @@ bool initGl(App& app) {
 #endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    app.window = SDL_CreateWindow("Suzuka Circuit", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+    app.window = SDL_CreateWindow(app.title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
                                   SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     if (!app.window) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
@@ -972,15 +1027,32 @@ bool initGl(App& app) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    bool test = argc > 1 && std::strcmp(argv[1], "--self-test") == 0;
+    bool test = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--self-test") == 0) {
+            test = true;
+        }
+    }
+    const std::string stem = pickTrackStem(argc, argv);
     Track track;
-    std::string path = findTrackPath();
+    std::string path = findTrackPath(stem);
     if (!track.load(path)) {
-        std::fprintf(stderr, "コースを読めません: %s\n", path.c_str());
-        return 1;
+        if (stem == "suzuka") {
+            std::fprintf(stderr, "コースを読めません: %s\n", path.c_str());
+            return 1;
+        }
+        // 指定コースが無ければ既定コースに落とす（ブラウザのタイプミス対策）。
+        path = findTrackPath("suzuka");
+        track = Track{};
+        if (!track.load(path)) {
+            std::fprintf(stderr, "コースを読めません: %s\n", path.c_str());
+            return 1;
+        }
     }
     if (test) {
-        return selfTest(track);
+        // 鈴鹿は従来どおり厳密な全長チェック、その他のコースは緩い範囲で見る。
+        return stem == "suzuka" ? selfTest(track, 5200.0f, 6500.0f)
+                                : selfTest(track, 1500.0f, 15000.0f);
     }
     loadTuning();
 
@@ -998,6 +1070,9 @@ int main(int argc, char** argv) {
     }
 
     App app;
+    if (stem == "flow") {
+        app.title = "Flow Circuit";
+    }
     app.track = std::move(track);
     if (!initGl(app)) {
         SDL_Quit();

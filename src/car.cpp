@@ -94,7 +94,9 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // でも「浅く入って深める」ができるようにする（アナログ入力にはほぼ影響なし）。
     const float rawCommand = twinActive ? twinIn : steerIn;
     const float commandTarget = wantDrift ? rawCommand : 0.0f;
-    driftCommand += clampf(commandTarget - driftCommand, -6.0f * dt, 6.0f * dt);
+    // コマンドの立ち上がり速度も進入の鋭さで変わる（鋭い車ほど即座に全開）。
+    const float commandRate = 3.5f + 4.5f * driftTuning.entrySharp;
+    driftCommand += clampf(commandTarget - driftCommand, -commandRate * dt, commandRate * dt);
     const float command = driftCommand;
     // 目標スリップ角は操作と逆符号になる:
     // 右へ切ると車体が右へ回り、速度は慣性で左に残るのでスリップ角は負。
@@ -110,9 +112,10 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     if (drifting && !wantDrift && std::fabs(slipAngle) < 0.10f && std::fabs(lateralSpeed) < 1.5f) {
         drifting = false;
     }
-    // グリップ量は急に切り替えず滑らかに移す（入るとき速く、戻るとき少し遅く）。
+    // グリップ量は急に切り替えず滑らかに移す。入るときの速さは進入の鋭さで
+    // 変える（戻るときは従来通り少し遅く）。
     const float amountTarget = drifting ? 1.0f : 0.0f;
-    const float amountRate = drifting ? 3.0f : 1.8f;
+    const float amountRate = drifting ? (1.7f + 3.1f * driftTuning.entrySharp) : 1.8f;
     driftAmount += clampf(amountTarget - driftAmount, -amountRate * dt, amountRate * dt);
 
     // --- ヨーレート --------------------------------------------------------
@@ -125,9 +128,13 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     if (driftAmount > 0.01f && (velX != 0.0f || velZ != 0.0f)) {
         const float velAngle = std::atan2(velX, velZ);  // 進行方向（yaw と同じ測り方）
         if (wantDrift) {
-            // 目標スリップ角になる車体の向きへ回す追加ヨー。
+            // 目標スリップ角になる車体の向きへ回す追加ヨー。進入の鋭さが低いと
+            // ゲインも上限も下がり、車体が一気に回らず角度がじわりと付く
+            // （鋭い設定では Inertial Drift のように切った瞬間に跳ねる）。
             const float yawErr = wrapPi((velAngle - targetSlip) - yaw);
-            yawRate += clampf(yawErr * 3.0f, -1.6f, 1.6f) * driftAmount;
+            const float yawGain = 2.0f + 1.4f * driftTuning.entrySharp;
+            const float yawClamp = 0.95f + 0.85f * driftTuning.entrySharp;
+            yawRate += clampf(yawErr * yawGain, -yawClamp, yawClamp) * driftAmount;
         } else {
             // 入力を離したら、車体を進行方向へ戻す向きに弱く回して収束を助ける。
             const float yawErr = wrapPi(velAngle - yaw);
@@ -272,6 +279,39 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
             velZ -= outZ * outVel;
         }
         // speed の上限（上の cap）をベクトルへ反映し直し、前後・横成分を取り直す。
+        {
+            float fx = std::sin(yaw);
+            float fz = std::cos(yaw);
+            float rx = std::cos(yaw);
+            float rz = -std::sin(yaw);
+            float vf = velX * fx + velZ * fz;
+            float vl = velX * rx + velZ * rz;
+            if (vf > speed) {
+                vf = speed;
+            }
+            velX = fx * vf + rx * vl;
+            velZ = fz * vf + rz * vl;
+            speed = vf;
+            lateralSpeed = vl;
+            slipAngle = vf > 0.5f ? std::atan2(vl, vf) : 0.0f;
+        }
+        // --- 壁ずり対策 -----------------------------------------------------
+        // 強く当たったフレームは、壁に沿う成分も含めて速度を落とす（軽く
+        // 擦るだけなら残す）。さらに、接触中に進行方向と車体の向きが大きく
+        // ずれているときは車体を進行方向へ少し回して壁に沿わせる。そのまま
+        // だと、回転グリップが速度を車体前方へ戻そうとし、壁がそれを削る
+        // 均衡で「横向きのまま壁を滑り続ける」状態になってしまうため。
+        if (outVel > 4.0f) {
+            velX *= 0.55f;
+            velZ *= 0.55f;
+        }
+        float velMag = std::sqrt(velX * velX + velZ * velZ);
+        if (velMag > 1.0f) {
+            float dyaw = wrapPi(std::atan2(velX, velZ) - yaw);
+            if (std::fabs(dyaw) > 0.10f) {
+                yaw += clampf(dyaw, -2.2f * dt, 2.2f * dt);
+            }
+        }
         {
             float fx = std::sin(yaw);
             float fz = std::cos(yaw);

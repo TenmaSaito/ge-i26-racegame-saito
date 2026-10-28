@@ -21,6 +21,12 @@ struct DriftTuning {
     float driftDecel = 0.15f;  // ドリフト中の減速率（1/s）。大きいほどドリフトで失速する
     float maxSlip = 0.95f;     // 目標スリップ角の上限（ラジアン、約54度）
     float minSpeed = 9.0f;     // ドリフトに入れる最低速度（m/s、約32km/h）
+    // ドリフト進入の鋭さ（0..1）。Inertial Drift は車種ごとに「倒した瞬間に
+    // 跳ねる車」と「徐々に角度が付く車」が分かれているように、進入の性格は
+    // 車ごとに違うもの。本作ではこの 1 本で、コマンドの立ち上がり・グリップの
+    // 抜け・追加ヨーの強さをまとめて変える。小さいほど穏やか（頭文字D式に
+    // 荷重移動でじわりと入る）、大きいほど鋭い（Inertial Drift 式に一気に切れる）。
+    float entrySharp = 0.25f;
 };
 
 extern DriftTuning driftTuning;

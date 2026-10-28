@@ -309,6 +309,8 @@ bool Track::load(const std::string& path) {
             ss >> halfWidth;
         } else if (key == "curb_width") {
             ss >> curbWidth;
+        } else if (key == "runoff") {
+            ss >> runoff;
         } else if (key == "length") {
             ss >> length;
         } else if (key == "spawn") {
