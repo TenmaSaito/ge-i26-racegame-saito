@@ -18,11 +18,12 @@
   header p { margin: 6px 0 0; opacity: .85; font-size: 14px; }
   #wrap {
     width: min(1280px, 96vw); margin: 14px auto 8px;
+    aspect-ratio: 16 / 9;
     border-radius: 14px; overflow: hidden;
     box-shadow: 0 18px 50px rgba(0,0,0,.45);
     background: #000;
   }
-  canvas { display: block; width: 100%; height: auto; background: #000; outline: none; }
+  canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
   #status { min-height: 1.4em; text-align: center; opacity: .85; font-size: 13px; }
   .bar { display: flex; gap: 10px; justify-content: center; margin: 8px 0 4px; }
   button {
@@ -59,7 +60,7 @@
   ドリフト：Space（または Shift / Ctrl）を押しながら A・D ／ 矢印キーを右スティック代わりに使うツインスティック方式も可<br>
   ドリフト中はマウスを横に動かすと、ドリフト開始位置からのずれで角度を調整できます<br>
   1 / 2 / 3：車種切替（BALANCE / DRIFT / SPEED）　C：カメラ（CHASE / CLOSE / FAR / DRIVER）<br>
-  T：ドリフト調整パネル　B：デバッグ表示　R：リセット　P：一時停止
+  T：ドリフト調整パネル　B：デバッグ表示　R：リセット　P：一時停止　F：全画面（切替）
 </div>
 
 <script>
@@ -80,9 +81,13 @@
   });
   var canvasEl = document.getElementById('canvas');
   canvasEl.addEventListener('click', function () { canvasEl.focus(); });
+  // 全画面はゲーム側（SDL）に任せる。ページ側から強制すると
+  // キャンバスと描画バッファが食い違って暗転するため、F キーを送る。
   document.getElementById('fs').addEventListener('click', function () {
-    if (Module.requestFullscreen) Module.requestFullscreen(false, true);
     canvasEl.focus();
+    var opt = { key: 'f', code: 'KeyF', keyCode: 70, which: 70, bubbles: true, cancelable: true };
+    canvasEl.dispatchEvent(new KeyboardEvent('keydown', opt));
+    canvasEl.dispatchEvent(new KeyboardEvent('keyup', opt));
   });
 </script>
 <script async src="racegame.js"></script>

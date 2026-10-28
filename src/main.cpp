@@ -4,6 +4,9 @@
 #include "track.hpp"
 
 #include <SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
+#endif
 #include <SDL_image.h>
 #include <SDL_mixer.h>
 
@@ -892,7 +895,7 @@ void drawHud(App& app) {
 
     if (app.showHelp) {
         hud.drawText(24, float(hud.height) - 102, 1.7f,
-                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  P PAUSE  B DEBUG  T TUNE",
+                     "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  F FULLSCREEN  P PAUSE  B DEBUG  T TUNE",
                      0.9f, 0.92f, 0.94f, 1);
         hud.drawText(24, float(hud.height) - 78, 1.7f,
                      "KEYBOARD TWIN-STICK: A/D STEER PLUS ARROW KEYS AS DRIFT STICK",
@@ -1062,6 +1065,12 @@ void frame(void* userdata) {
                 else if (code == SDL_SCANCODE_P) app.paused = !app.paused;
                 else if (code == SDL_SCANCODE_H) app.showHelp = !app.showHelp;
                 else if (code == SDL_SCANCODE_B) app.showDriftDebug = !app.showDriftDebug;
+                else if (code == SDL_SCANCODE_F) {
+                    // フルスクリーンは SDL 経由で切り替える。ページ側から
+                    // 強制するとキャンバスと描画バッファがずれて暗転する。
+                    Uint32 flags = SDL_GetWindowFlags(app.window);
+                    SDL_SetWindowFullscreen(app.window, (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                }
                 else if (code == SDL_SCANCODE_1) applyCarSpec(app, 0);
                 else if (code == SDL_SCANCODE_2) applyCarSpec(app, 1);
                 else if (code == SDL_SCANCODE_3) applyCarSpec(app, 2);
@@ -1442,6 +1451,15 @@ bool initGl(App& app) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         return false;
     }
+#ifdef __EMSCRIPTEN__
+    // 起動時に SDL ウィンドウをキャンバスの表示領域に合わせる。
+    // 固定 1280x720 のままだと小さい画面で見切れる。
+    {
+        int cw = 0, ch = 0;
+        emscripten_get_canvas_element_size("#canvas", &cw, &ch);
+        if (cw > 100 && ch > 100) SDL_SetWindowSize(app.window, cw, ch);
+    }
+#endif
     app.gl = SDL_GL_CreateContext(app.window);
     if (!app.gl) {
         SDL_Log("SDL_GL_CreateContext failed: %s", SDL_GetError());
@@ -1456,6 +1474,18 @@ bool initGl(App& app) {
 }
 
 }  // namespace
+
+#ifdef __EMSCRIPTEN__
+// ブラウザのウィンドウがリサイズされたら、SDL ウィンドウを
+// キャンバスの表示領域に合わせ直す。
+static EM_BOOL onBrowserResize(int, const EmscriptenUiEvent*, void* userData) {
+    App* app = static_cast<App*>(userData);
+    int cw = 0, ch = 0;
+    emscripten_get_canvas_element_size("#canvas", &cw, &ch);
+    if (app->window && cw > 100 && ch > 100) SDL_SetWindowSize(app->window, cw, ch);
+    return EM_FALSE;
+}
+#endif
 
 int main(int argc, char** argv) {
     bool test = false;
@@ -1512,6 +1542,9 @@ int main(int argc, char** argv) {
         SDL_Quit();
         return 1;
     }
+#ifdef __EMSCRIPTEN__
+    emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, &app, EM_FALSE, onBrowserResize);
+#endif
     openPad(app);
     // 路面チャンクも景観チャンクと同じリストでカリング描画する。
     for (size_t i = 0; i < app.track.visualChunks.size(); ++i) {
