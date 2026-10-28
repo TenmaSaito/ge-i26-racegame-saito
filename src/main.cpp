@@ -100,6 +100,7 @@ struct App {
     std::vector<Vec3> sceneryCenters;
     int carSpec = 0;                   // 選択中の車種（1/2/3 キー）
     float bodyRollSm = 0;              // 車体の傾き（平滑化済み）
+    float fpsSm = 60.0f;               // FPS 表示（平滑化済み）
     float bodyPitchSm = 0;
     struct TrailPoint { Vec3 pos; float age; };
     std::vector<TrailPoint> trailL, trailR;  // ドリフト中のテールランプ軌跡
@@ -798,6 +799,9 @@ void drawHud(App& app) {
     std::snprintf(line, sizeof(line), "%d KM/H", kmh);
     hud.drawText(24, 22, 4.0f, line, 0.95f, 0.96f, 0.98f, 1);
 
+    std::snprintf(line, sizeof(line), "FPS %d", int(std::lround(app.fpsSm)));
+    hud.drawText(float(app.renderer.width) - 118.0f, 22, 2.2f, line, 0.85f, 0.88f, 0.92f, 1);
+
     if (!app.race.timing) {
         std::snprintf(line, sizeof(line), "OUT LAP");
     } else {
@@ -885,6 +889,12 @@ void drawHud(App& app) {
         drawTuning(app);
     }
     hud.flushHud();
+}
+
+float surfaceHeightAt(const App& app, Vec3 p) {
+    TrackPose pose = app.track.query(p.x, p.z, app.car.y, app.car.ground.s);
+    if (!pose.found) return app.car.y;
+    return pose.centerY + pose.lateral * pose.cross;
 }
 
 float carPitch(const App& app) {
@@ -1065,6 +1075,7 @@ void frame(void* userdata) {
     double elapsed = double(now - app.prevCounter) / double(SDL_GetPerformanceFrequency());
     app.prevCounter = now;
     if (elapsed > kMaxFrameSec) elapsed = kMaxFrameSec;
+    if (elapsed > 0.0001) app.fpsSm += float(1.0 / elapsed - app.fpsSm) * 0.05f;
     if (elapsed < 0) elapsed = 0;
 
     if (app.paused) {
@@ -1112,14 +1123,24 @@ void frame(void* userdata) {
     // 車体の傾きは荷重移動なので、目標へ一気に行かず少し遅れて追う
     // （以前は横速度に即応してカクついて見えた）。
     {
-        float pitchT = carPitch(app);
-        float rollT = std::atan(app.car.ground.cross) -
+        // 車体の角度は路面の平面に這わせる。前後・左右 4 点の路面高から
+        // 面の傾きを求めるので、斜めに止まってもバンクと勾配の両方に合う。
+        Vec3 pos{app.car.x, app.car.y, app.car.z};
+        Vec3 fw{std::sin(app.car.yaw), 0, std::cos(app.car.yaw)};
+        Vec3 rt{fw.z, 0, -fw.x};
+        float hF = surfaceHeightAt(app, pos + fw * 2.2f);
+        float hB = surfaceHeightAt(app, pos - fw * 2.2f);
+        float hR = surfaceHeightAt(app, pos + rt * 1.0f);
+        float hL = surfaceHeightAt(app, pos - rt * 1.0f);
+        float pitchT = std::atan2(hF - hB, 4.4f);
+        float rollT = std::atan2(hR - hL, 2.0f) -
                       clampf(app.car.lateralSpeed * 0.009f, -0.12f, 0.12f);
         const float k = 1.0f - std::exp(-3.0f / 60.0f);
         app.bodyPitchSm += (pitchT - app.bodyPitchSm) * k;
         app.bodyRollSm += (rollT - app.bodyRollSm) * k;
     }
     Mat4 model = carModelMatrix(app.car, app.bodyPitchSm, app.bodyRollSm);
+    model = mul(translation(0, 0.05f, 0), model);  // 平面に這わせた際の角のめり込み防止
     app.renderer.draw(app.body, model);
     // テールランプ: ブレーキで強点灯、ドリフト中は点灯、それ以外は消灯色。
     const GpuMesh& lamps = app.lastInput.brake > 0.05f ? app.lampsBright
