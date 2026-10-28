@@ -131,6 +131,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
     const float grassOuter = track_.halfWidth + track_.curbWidth + track_.runoff + 0.8f;
     TreeObject tree;
     BuildingObject building;
+    HouseObject house;
     for (int i = 0; i < n; ++i) {
         const int ci = i / samplesPerChunk;
         CpuMesh& mesh = chunks[size_t(ci)].mesh;
@@ -157,6 +158,19 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                     building.build(mesh, pos, 1.0f, h ^ 0x77u);
                 }
             }
+            // 住宅街: 約 180m 間隔の候補に、5〜9軒の小さな集落を作る。
+            if (i % 90 == 0 && (h % 100u) < 55u) {
+                const float clat = grassOuter + 55.0f + float((h >> 11) % 100u) / 100.0f * 55.0f;
+                Vec3 cpos = pointAt(i, side * clat);
+                const float cbaseY = edgeY(i, side);
+                const int count = 5 + int((h >> 20) % 5u);
+                for (int u = 0; u < count; ++u) {
+                    unsigned hh = treeHash(i * 31 + u * 7, side);
+                    Vec3 hp{cpos.x + (float((hh >> 8) % 1000u) / 1000.0f - 0.5f) * 46.0f, cbaseY - 0.3f,
+                            cpos.z + (float((hh >> 18) % 1000u) / 1000.0f - 0.5f) * 46.0f};
+                    if (clearOfOtherRoad(hp, 12.0f, cbaseY, i)) house.build(mesh, hp, 1.0f, hh);
+                }
+            }
         }
     }
     for (int c = 0; c < chunkCount; ++c) {
@@ -167,4 +181,64 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
         chunks[size_t(c)].center = {mid.x, mid.y, mid.z};
     }
     return chunks;
+}
+
+void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const {
+    static const Vec3 wallPalette[4] = {
+        {0.82f, 0.80f, 0.76f}, {0.78f, 0.72f, 0.64f},
+        {0.72f, 0.76f, 0.78f}, {0.84f, 0.78f, 0.70f}};
+    static const Vec3 roofPalette[3] = {
+        {0.36f, 0.38f, 0.44f}, {0.48f, 0.30f, 0.24f}, {0.26f, 0.36f, 0.38f}};
+    const Vec3 wall = wallPalette[seed % 4u];
+    const Vec3 roof = roofPalette[(seed >> 3) % 3u];
+    const float w = (3.0f + hash01(seed ^ 0xD4u) * 1.4f) * scale;   // 半幅
+    const float d = (2.6f + hash01(seed ^ 0xE5u) * 1.1f) * scale;   // 半奥行
+    const float h = (3.0f + hash01(seed ^ 0xF6u) * 1.4f) * scale;   // 壁の高さ
+    const float rh = (1.7f + hash01(seed ^ 0x87u) * 1.0f) * scale;  // 屋根の高さ
+    mesh.addBox({base.x - w, base.y, base.z - d}, {base.x + w, base.y + h, base.z + d}, wall);
+    const float top = base.y + h;
+    const float ridge = top + rh;
+    // 切妻屋根: 2 枚の傾斜面 + 両端の三角壁。棟は x 方向。
+    Vec3 e0{base.x - w, top, base.z - d}, e1{base.x + w, top, base.z - d};
+    Vec3 e2{base.x + w, top, base.z + d}, e3{base.x - w, top, base.z + d};
+    Vec3 r0{base.x - w, ridge, base.z}, r1{base.x + w, ridge, base.z};
+    mesh.addQuad(e0, e1, r1, r0, {0, 0.5f, -1}, roof);
+    mesh.addQuad(e2, e3, r0, r1, {0, 0.5f, 1}, roof);
+    mesh.addTriangle(e1, e2, r1, {1, 0, 0}, wall);
+    mesh.addTriangle(e3, e0, r0, {-1, 0, 0}, wall);
+}
+
+// コースを囲む山並み。中心から見た稜線をギザギザの帯で作る。
+// 近い側は霞越しに稜線が見え、遠い側は霧に溶ける（スカイボックス相当の役割）。
+CpuMesh SceneryBuilder::buildBackdrop() const {
+    CpuMesh mesh;
+    float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f, minY = 1e9f;
+    for (const TrackSample& s : track_.samples) {
+        minX = std::min(minX, s.x); maxX = std::max(maxX, s.x);
+        minZ = std::min(minZ, s.z); maxZ = std::max(maxZ, s.z);
+        minY = std::min(minY, s.y);
+    }
+    const Vec3 center{(minX + maxX) * 0.5f, 0, (minZ + maxZ) * 0.5f};
+    const float baseRadius = std::max(maxX - minX, maxZ - minZ) * 0.5f;
+    const int seg = 72;
+    const Vec3 colA{0.38f, 0.47f, 0.46f};
+    const Vec3 colB{0.33f, 0.42f, 0.44f};
+    auto ridgeAt = [&](int k) {
+        unsigned h = treeHash(k * 7 + 3, 1.0f);
+        float ang = float(k) / float(seg) * 6.2831853f;
+        float r = baseRadius + 950.0f + float((h >> 9) % 100u) / 100.0f * 300.0f;
+        float y = minY + 55.0f + float((h >> 17) % 100u) / 100.0f * 95.0f;
+        return Vec3{center.x + std::sin(ang) * r, y, center.z + std::cos(ang) * r};
+    };
+    for (int k = 0; k < seg; ++k) {
+        Vec3 p0 = ridgeAt(k);
+        Vec3 p1 = ridgeAt(k + 1);
+        Vec3 b0{p0.x, minY - 40.0f, p0.z};
+        Vec3 b1{p1.x, minY - 40.0f, p1.z};
+        Vec3 n = normalize(Vec3{-(p0.x + p1.x) * 0.5f + center.x, 0,
+                                -(p0.z + p1.z) * 0.5f + center.z});
+        const Vec3 c = (k % 2 == 0) ? colA : colB;
+        mesh.addQuad(b0, b1, p1, p0, n, c);
+    }
+    return mesh;
 }

@@ -31,6 +31,12 @@ public:
     void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const override;
 };
 
+// 住宅（壁 + 切妻屋根）。住宅街はこれをまとめて配置する。
+class HouseObject : public SceneryObject {
+public:
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const override;
+};
+
 // 景観メッシュのひとかたまり（チャンク）。中心は描画カリング用。
 struct SceneryChunk {
     CpuMesh mesh;
@@ -45,6 +51,8 @@ public:
     explicit SceneryBuilder(const Track& track) : track_(track) {}
 
     std::vector<SceneryChunk> build(int samplesPerChunk = 120) const;
+    // 背景の山並み（コースをぐるりと囲む稜線リング）。スカイボックス代わり。
+    CpuMesh buildBackdrop() const;
 
 private:
     const Track& track_;

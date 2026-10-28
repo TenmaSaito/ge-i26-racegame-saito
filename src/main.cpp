@@ -90,6 +90,7 @@ struct App {
     GpuMesh body;
     GpuMesh wheel;
     GpuMesh shadow;
+    GpuMesh backdrop;
     GpuMesh lampsOff;
     GpuMesh lampsOn;
     GpuMesh lampsBright;
@@ -521,9 +522,11 @@ void tickRace(Race& race, float s, float length, float dt) {
 }
 
 void updateCamera(App& app, float dt) {
-    const float back[3] = {8.6f, 4.1f, 16.0f};
-    const float up[3] = {3.3f, 1.55f, 7.2f};
-    const float ahead[3] = {9.0f, 6.0f, 14.0f};
+    // 疾走感のため既定カメラをぐっと近づけた（後方 8.6→6.0m、高さ 3.3→2.3m）。
+    // 車が大きく映り、路傍の木やガードレールが速く流れるようになる。
+    const float back[3] = {6.0f, 4.1f, 12.5f};
+    const float up[3] = {2.3f, 1.55f, 5.6f};
+    const float ahead[3] = {7.0f, 6.0f, 11.0f};
     int mode = app.camera.mode;
     // ドリフト中は車体の向きではなく進行方向寄りにカメラを向ける。
     // 車がカニ走りしても視線が置いていかれず、滑っている感じが伝わる。
@@ -1087,6 +1090,7 @@ void frame(void* userdata) {
 
     Mat4 identity;
     app.renderer.draw(app.course, identity);
+    app.renderer.draw(app.backdrop, identity);
     // 景観はチャンク単位で距離カリング（1200m 以内だけ描く）。
     for (size_t i = 0; i < app.scenery.size(); ++i) {
         float dx = app.sceneryCenters[i].x - app.camera.eye.x;
@@ -1428,6 +1432,7 @@ int main(int argc, char** argv) {
             app.scenery.push_back(app.renderer.upload(chunk.mesh));
             app.sceneryCenters.push_back(chunk.center);
         }
+        app.backdrop = app.renderer.upload(builder.buildBackdrop());
         CpuMesh lampMesh;
         buildTailLamps(lampMesh, {0.22f, 0.03f, 0.03f});
         app.lampsOff = app.renderer.upload(lampMesh);
