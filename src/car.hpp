@@ -26,7 +26,7 @@ struct DriftTuning {
     // 車ごとに違うもの。本作ではこの 1 本で、コマンドの立ち上がり・グリップの
     // 抜け・追加ヨーの強さをまとめて変える。小さいほど穏やか（頭文字D式に
     // 荷重移動でじわりと入る）、大きいほど鋭い（Inertial Drift 式に一気に切れる）。
-    float entrySharp = 0.25f;
+    float entrySharp = 0.0f;
 };
 
 extern DriftTuning driftTuning;

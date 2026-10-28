@@ -91,6 +91,11 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     }
     const bool flick = driftCharge > 0.30f;
     const bool wantDrift = (input.drift && std::fabs(steerIn) > 0.2f) || twinActive || flick;
+    // 進入の鋭さ。ツインスティックは「倒した分だけ角度」という直接操作なので、
+    // 鋭さが最低でも応答が鈍くなりすぎないよう下限を設ける（ボタン/キー/マウス
+    // 経由の進入は設定どおり穏やかになる）。
+    const float entryEff = twinActive ? std::max(driftTuning.entrySharp, 0.4f)
+                                      : driftTuning.entrySharp;
     // ドリフト系の入力が何かあるか（ボタンだけ押している等も含む）。長い
     // コーナーでは必要なステアが小さく wantDrift が切れがちで、そのたびに
     // ドリフトが終わって「押して離して」の繰り返しになっていた。そのため
@@ -109,7 +114,7 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     const float rawCommand = twinActive ? twinIn : steerIn;
     const float commandTarget = (wantDrift || (drifting && anyDriftInput)) ? rawCommand : 0.0f;
     // コマンドの立ち上がり速度も進入の鋭さで変わる（鋭い車ほど即座に全開）。
-    const float commandRate = 3.5f + 4.5f * driftTuning.entrySharp;
+    const float commandRate = 3.5f + 4.5f * entryEff;
     driftCommand += clampf(commandTarget - driftCommand, -commandRate * dt, commandRate * dt);
     const float command = driftCommand;
     // 目標スリップ角は操作と逆符号になる:
@@ -146,7 +151,7 @@ void Car::stepDrift(float dt, const DriveInput& input) {
     // グリップ量は急に切り替えず滑らかに移す。入るときの速さは進入の鋭さで
     // 変える（戻るときは従来通り少し遅く）。
     const float amountTarget = drifting ? 1.0f : 0.0f;
-    const float amountRate = drifting ? (1.7f + 3.1f * driftTuning.entrySharp) : 1.8f;
+    const float amountRate = drifting ? (1.7f + 3.1f * entryEff) : 1.8f;
     driftAmount += clampf(amountTarget - driftAmount, -amountRate * dt, amountRate * dt);
 
     // --- ヨーレート --------------------------------------------------------
@@ -163,8 +168,8 @@ void Car::stepDrift(float dt, const DriveInput& input) {
             // ゲインも上限も下がり、車体が一気に回らず角度がじわりと付く
             // （鋭い設定では Inertial Drift のように切った瞬間に跳ねる）。
             const float yawErr = wrapPi((velAngle - targetSlip) - yaw);
-            const float yawGain = 2.0f + 1.4f * driftTuning.entrySharp;
-            const float yawClamp = 0.95f + 0.85f * driftTuning.entrySharp;
+            const float yawGain = 2.0f + 1.4f * entryEff;
+            const float yawClamp = 0.95f + 0.85f * entryEff;
             yawRate += clampf(yawErr * yawGain, -yawClamp, yawClamp) * driftAmount;
         } else {
             // 入力を離したら、車体を進行方向へ戻す向きに弱く回して収束を助ける。

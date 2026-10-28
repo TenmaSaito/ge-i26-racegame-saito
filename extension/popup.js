@@ -17,7 +17,7 @@ const ITEMS = [
   { key: "minSpeed", label: "ドリフト最低速度", desc: "この速度より遅いとドリフトに入らない", min: 0, max: 90, step: 2, def: 32, unit: " km/h",
     disp: (ms) => Math.round(ms * 3.6), inv: (kmh) => kmh / 3.6 },
   { key: "gripNormal", label: "通常グリップ", desc: "通常時の横グリップ", min: 6, max: 30, step: 0.5, def: 15, unit: "" },
-  { key: "entry", label: "進入の鋭さ（ENTRY）", desc: "小さいとじわり、大きいと切った瞬間に一気に曲がる", min: 0.0, max: 1.0, step: 0.05, def: 0.25, unit: "" },
+  { key: "entry", label: "進入の鋭さ（ENTRY）", desc: "小さいとじわり、大きいと切った瞬間に一気に曲がる", min: 0.0, max: 1.0, step: 0.05, def: 0, unit: "" },
 ];
 
 const values = {};   // 保存値（ゲーム内部の単位）
