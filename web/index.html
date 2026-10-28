@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ドリフトレース（仮） | AQUART</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: #eaf6ff;
+    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+    background: linear-gradient(180deg, #0a2e46 0%, #0d4a66 55%, #0a6a8a 100%);
+    display: flex; flex-direction: column; align-items: center;
+  }
+  header { text-align: center; padding: 28px 16px 6px; }
+  header h1 { margin: 0; font-size: clamp(22px, 4vw, 34px); letter-spacing: .08em; }
+  header p { margin: 6px 0 0; opacity: .85; font-size: 14px; }
+  #wrap {
+    width: min(1280px, 96vw); margin: 14px auto 8px;
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0,0,0,.45);
+    background: #000;
+  }
+  canvas { display: block; width: 100%; height: auto; background: #000; outline: none; }
+  #status { min-height: 1.4em; text-align: center; opacity: .85; font-size: 13px; }
+  .bar { display: flex; gap: 10px; justify-content: center; margin: 8px 0 4px; }
+  button {
+    cursor: pointer; border: 1px solid rgba(255,255,255,.35); color: #eaf6ff;
+    background: rgba(255,255,255,.12); border-radius: 999px; padding: 8px 18px; font-size: 14px;
+  }
+  button:hover { background: rgba(255,255,255,.22); }
+  .howto {
+    width: min(1280px, 96vw); margin: 10px auto 34px; padding: 14px 18px;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
+    border-radius: 12px; font-size: 13.5px; line-height: 1.9;
+  }
+  .howto b { color: #bfe9ff; }
+  a { color: #9fdcff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ドリフトレース（仮）</h1>
+  <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
+</header>
+
+<div id="wrap">
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+</div>
+<div id="status">読み込み中…</div>
+<div class="bar">
+  <button id="fs" type="button">全画面で遊ぶ</button>
+</div>
+
+<div class="howto">
+  <b>操作</b><br>
+  W / ↑：アクセル　S / ↓：ブレーキ　A・D：ステアリング<br>
+  ドリフト：Space（または Shift / Ctrl）を押しながら A・D ／ 矢印キーを右スティック代わりに使うツインスティック方式も可<br>
+  ドリフト中はマウスを横に動かすと、ドリフト開始位置からのずれで角度を調整できます<br>
+  1 / 2 / 3：車種切替（BALANCE / DRIFT / SPEED）　C：カメラ（CHASE / CLOSE / FAR / DRIVER）<br>
+  T：ドリフト調整パネル　B：デバッグ表示　R：リセット　P：一時停止
+</div>
+
+<script>
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    setStatus: function (text) {
+      document.getElementById('status').textContent = text || '';
+    },
+    totalDependencies: 0,
+    monitorRunDependencies: function (left) {
+      this.totalDependencies = Math.max(this.totalDependencies, left);
+      Module.setStatus(left ? '読み込み中… (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')' : '');
+    }
+  };
+  Module.setStatus('読み込み中…');
+  window.addEventListener('error', function () {
+    Module.setStatus('読み込みでエラーが発生しました。再読み込みしてください。');
+  });
+  var canvasEl = document.getElementById('canvas');
+  canvasEl.addEventListener('click', function () { canvasEl.focus(); });
+  document.getElementById('fs').addEventListener('click', function () {
+    if (Module.requestFullscreen) Module.requestFullscreen(false, true);
+    canvasEl.focus();
+  });
+</script>
+<script async src="racegame.js"></script>
+</body>
+</html>
