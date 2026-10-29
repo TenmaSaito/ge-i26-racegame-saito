@@ -63,6 +63,9 @@ void RaceScene::frame(double dtSeconds) {
     app.setLastInput(input);
     if (app.showTuning()) {
         input = DriveInput{};  // チューニング中は矢印キーを運転に使わない
+    if (app.race().counting()) {
+        input = DriveInput{};  // カウントダウン中はスタート待ち (空ぶかしも無し)
+    }
     }
     if (padPulse.reset) reset = true;
     if (padPulse.pause) app.setPaused(!app.paused());
@@ -138,6 +141,15 @@ void RaceScene::frame(double dtSeconds) {
                                   : clampf((std::fabs(car.lateralSpeed) - 6.0f) / 12.0f, 0.0f, 0.6f);
         slip *= clampf(std::fabs(car.speed) / 15.0f, 0.0f, 1.0f);
         app.setSlip(app.paused() ? 0.0f : slip);
+        // エンジン音: 速度で音程の段、スロットルで音量。アイドル分として
+        // load に下限を持たせ、レース中は常時鳴らす (停止合図は 0,0)。
+        if (app.paused()) {
+            app.setEngine(0, 0);
+        } else {
+            float rpm = clampf(std::fabs(car.speed) / 58.0f, 0.0f, 1.0f);
+            float load = 0.12f + clampf(input.throttle, 0.0f, 1.0f) * 0.88f;
+            app.setEngine(rpm, load);
+        }
     }
 
     // --- ゴール判定: 規定周回を完了したらリザルトへ -------------------------

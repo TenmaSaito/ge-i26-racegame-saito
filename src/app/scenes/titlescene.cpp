@@ -12,7 +12,8 @@
 #include <cmath>
 
 void TitleScene::enter() {
-    game_.setSlip(0);  // レース外ではスリップ音を止める
+    game_.setSlip(0);    // レース外ではドリフト音を止める
+    game_.setEngine(0, 0);  // エンジン音も止める
     game_.resetRace();  // 車をスタート地点へ (カメラも次のフレームで置き直す)
     t_ = 0;
 }

@@ -96,6 +96,10 @@ public:
     void setSlip(float amount) {
         if (audio_) audio_->setSlip(amount);
     }
+    // エンジン音の状態を音声実装へ伝える (rpm=音程の段、load=音量)。
+    void setEngine(float rpm, float load) {
+        if (audio_) audio_->setEngine(rpm, load);
+    }
     const Ghost& ghost() const { return ghost_; }
     // ゴーストを半透明で描く (計測中で保存済みがあるときだけ実働)。
     void drawGhost();

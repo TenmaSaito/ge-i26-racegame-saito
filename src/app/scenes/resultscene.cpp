@@ -12,7 +12,8 @@
 #include <cmath>
 
 void ResultScene::enter() {
-    game_.setSlip(0);  // レース外ではスリップ音を止める
+    game_.setSlip(0);    // レース外ではドリフト音を止める
+    game_.setEngine(0, 0);  // エンジン音も止める
     t_ = 0;
     rank_ = game_.recordResult();  // ゴール結果をランキングへ登録 (保存まで)
     // 車はゴール地点で止まったまま。カメラは次のフレームから周回させる。

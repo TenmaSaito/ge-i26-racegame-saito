@@ -12,6 +12,20 @@ void Race::reset() {
 }
 
 void Race::tick(float s, float length, float dt) {
+    // カウント中は周回判定を止める。s の追跡だけ続けて、GO の瞬間に
+    // ライン通過と誤検出しないようにする。
+    if (goFlash_ > 0) {
+        goFlash_ -= dt;
+    }
+    if (countdown_ > 0) {
+        countdown_ -= dt;
+        prevS_ = s;
+        if (countdown_ <= 0) {
+            countdown_ = 0;
+            goFlash_ = kGoFlash;
+        }
+        return;
+    }
     if (prevS_ >= 0) {
         float gap = (length - prevS_) + s;
         // 後半→前半へ大きく巻き戻り、かつ移動量が小さいときだけ周回とみなす

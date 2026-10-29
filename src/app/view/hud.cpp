@@ -265,6 +265,35 @@ void Hud::draw(Game& app) {
     formatTime(line, sizeof(line), app.race().lap());
     hud.drawText(150, 64, 2.2f, line, 0.95f, 0.96f, 0.98f, 1);
 
+    // --- スタートカウントダウン 3・2・1 と GO! -------------------------------
+    // 「手前からフェードイン」: 数字が小さく薄く現れ、素早く大きく濃くなる
+    // (奥から近づいてくる見え方)。1 つ 0.55 秒でテンポよく切り替わる。
+    if (app.race().counting()) {
+        float left = app.race().countdownLeft();
+        int num = int(std::ceil(left / Race::kCountdownSlot));
+        if (num < 1) num = 1;
+        if (num > 3) num = 3;
+        float inSlot = Race::kCountdownSlot - (left - float(num - 1) * Race::kCountdownSlot);
+        float p = inSlot / Race::kCountdownSlot;                 // 0→1
+        float q = p * 2.4f; if (q > 1.0f) q = 1.0f;              // 前半で寄り切る
+        float pop = 1.0f - (1.0f - q) * (1.0f - q) * (1.0f - q); // easeOutCubic
+        float scale = 13.0f * (0.35f + 0.65f * pop);
+        std::snprintf(line, sizeof(line), "%d", num);
+        float w = 5.0f * scale;
+        hud.drawText((float(app.renderer()->width()) - w) * 0.5f,
+                     float(app.renderer()->height()) * 0.30f, scale, line,
+                     1.0f, 0.96f, 0.86f, pop);
+    } else if (app.race().goFlash() > 0) {
+        float p = 1.0f - app.race().goFlash() / Race::kGoFlash;  // 0→1
+        float q = p * 2.4f; if (q > 1.0f) q = 1.0f;
+        float pop = 1.0f - (1.0f - q) * (1.0f - q) * (1.0f - q);
+        float scale = 13.0f * (0.35f + 0.65f * pop) * (1.0f + p * 0.12f);
+        float w = 17.0f * scale;  // "GO!" = (3*6-1) * scale
+        hud.drawText((float(app.renderer()->width()) - w) * 0.5f,
+                     float(app.renderer()->height()) * 0.30f, scale, "GO!",
+                     0.55f, 1.0f, 0.60f, 1.0f - p * p * 0.65f);
+    }
+
     char best[32];
     formatTime(best, sizeof(best), app.race().best());
     std::snprintf(line, sizeof(line), "BEST %s", best);

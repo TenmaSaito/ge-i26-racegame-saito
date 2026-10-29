@@ -1,10 +1,12 @@
 // ============================================================================
 // audio.cpp ― 音声実装 (SDL_mixer)
-// 役割: 仮のタイヤスリップ音を「波形から合成して」鳴らす。音声ファイルは
-//       使わず、メモリ上で波形を作って Mix_Chunk 化する (素材の権利問題を
-//       避けつつ、音の仕組みだけ先に通すための仮実装)。
-//       スリップ音 = 高めのサイン波 + 倍音 + 少量のノイズ、をループ再生し、
-//       強さは音量で表す (ピッチ変更は SDL_mixer の素の機能には無いため)。
+// 役割: 車の音を鳴らす。素材は assets/sound/ の WAV (提供された音源を変換)。
+//   - エンジン音 (engine.wav の定常部分 2.5 秒): SDL_mixer には再生速度の
+//     変更機能が無いため、読み込み時に 6 段階のピッチ違いループを
+//     リサンプリングで用意し、回転数に応じて切り替える (段付きの変速感)。
+//   - ドリフト音 (drift.wav、「ロケットスタート」音源): ドリフト開始で
+//     鳴らし始め、強さで音量を変える。終わったらフェードアウト。
+// どちらも「音が出せない環境では黙って何もしない」のが契約。
 // ============================================================================
 
 #include "audio.hpp"
@@ -13,95 +15,229 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
 
-// スリップ音の波形を合成する。44.1kHz / 16bit / モノラル、0.5 秒ループ。
-// ループの継ぎ目でクリック音が出ないよう、末尾と先頭をクロスフェードする。
-Mix_Chunk* makeSlipChunk() {
-    const int rate = 44100;
-    const int frames = rate / 2;  // 0.5 秒
-    std::vector<int16_t> samples;
-    samples.resize(size_t(frames));
-    double phase = 0;             // 位相 (周波数を揺らすため積分で持つ)
-    unsigned noiseState = 12345;  // 決定的なノイズ源 (LCG)
-    float noiseSmooth = 0;
-    for (int i = 0; i < frames; ++i) {
-        double t = double(i) / rate;
-        // ビブラート: 周波数を ±6% ゆっくり揺らすと「キー」という鳴きになる。
-        double freq = 820.0 * (1.0 + 0.06 * std::sin(2.0 * 3.14159265 * 9.0 * t));
-        phase += 2.0 * 3.14159265 * freq / rate;
-        noiseState = noiseState * 1664525u + 1013904223u;
-        float noise = (float((noiseState >> 16) & 0x7FFF) / 16384.0f - 1.0f);
-        noiseSmooth += (noise - noiseSmooth) * 0.25f;  // 荒さを均す
-        double v = 0.55 * std::sin(phase) + 0.25 * std::sin(2.0 * phase) + 0.10 * noiseSmooth;
-        samples[size_t(i)] = int16_t(v * 32767.0 * 0.7);
+// 音素材の場所を探す (実行環境で基準フォルダが違うため候補を順に試す)。
+std::string findAsset(const char* name) {
+    const std::string rel = std::string("assets/sound/") + name;
+    const char* prefixes[] = {"", "../", "/"};
+    for (const char* prefix : prefixes) {
+        std::string path = std::string(prefix) + rel;
+        if (FILE* f = std::fopen(path.c_str(), "rb")) {
+            std::fclose(f);
+            return path;
+        }
     }
-    // 継ぎ目のクロスフェード (30ms)。
-    const int fade = 1323;
-    for (int i = 0; i < fade; ++i) {
-        float f = float(i) / float(fade);
-        int tail = frames - fade + i;
-        samples[size_t(tail)] = int16_t(samples[size_t(tail)] * (1.0f - f) + samples[size_t(i)] * f);
-    }
-    // WAV コンテナに詰めて Mix_Chunk 化する。
-    std::vector<uint8_t> wav;
-    auto put32 = [&](uint32_t v) {
-        for (int b = 0; b < 4; ++b) wav.push_back(uint8_t((v >> (8 * b)) & 0xFF));
-    };
-    auto put16 = [&](uint16_t v) {
-        for (int b = 0; b < 2; ++b) wav.push_back(uint8_t((v >> (8 * b)) & 0xFF));
-    };
-    auto putTag = [&](const char* tag) { for (int b = 0; b < 4; ++b) wav.push_back(uint8_t(tag[b])); };
-    uint32_t dataBytes = uint32_t(samples.size() * 2);
-    putTag("RIFF"); put32(36 + dataBytes); putTag("WAVE");
-    putTag("fmt "); put32(16); put16(1); put16(1);
-    put32(uint32_t(rate)); put32(uint32_t(rate * 2)); put16(2); put16(16);
-    putTag("data"); put32(dataBytes);
-    for (int16_t s : samples) put16(uint16_t(s));
-    SDL_RWops* rw = SDL_RWFromMem(wav.data(), int(wav.size()));
-    if (!rw) {
-        return nullptr;
-    }
-    return Mix_LoadWAV_RW(rw, 1);  // freesrc=1 で RW も閉じる
+    return "";
 }
 
-// SDL_mixer 実装。チャンネルを 1 つ占有してループ再生する。
-class MixerAudio final : public IAudio {
-public:
-    MixerAudio() : chunk_(makeSlipChunk()) {}
-    ~MixerAudio() override {
-        if (channel_ >= 0) {
-            Mix_HaltChannel(channel_);
+// PCM16 WAV を読み、ステレオ 44.1kHz の int16 配列へ正規化して返す。
+// 対応はゲーム素材として十分な範囲 (PCM / 16bit / 1〜2ch / 任意レート)。
+bool loadWavStereo(const std::string& path, std::vector<int16_t>& out) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) {
+        return false;
+    }
+    std::fseek(f, 0, SEEK_END);
+    long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (size <= 44) {
+        std::fclose(f);
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    bytes.resize(size_t(size));
+    bool readOk = std::fread(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    std::fclose(f);
+    if (!readOk || std::memcmp(bytes.data(), "RIFF", 4) != 0) {
+        return false;
+    }
+    auto u16 = [&](size_t at) { return uint16_t(bytes[at] | (bytes[at + 1] << 8)); };
+    auto u32 = [&](size_t at) {
+        return uint32_t(bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) |
+                        (uint32_t(bytes[at + 3]) << 24));
+    };
+    int channels = 0;
+    int rate = 0;
+    const uint8_t* data = nullptr;
+    uint32_t dataBytes = 0;
+    for (size_t at = 12; at + 8 <= bytes.size();) {
+        uint32_t chunkSize = u32(at + 4);
+        if (std::memcmp(bytes.data() + at, "fmt ", 4) == 0) {
+            if (u16(at + 8) != 1 || u16(at + 22) == 0) {
+                return false;  // PCM 以外は扱わない
+            }
+            channels = u16(at + 10);
+            rate = int(u32(at + 12));
+            if (u16(at + 34) != 16) {
+                return false;  // 16bit のみ
+            }
+        } else if (std::memcmp(bytes.data() + at, "data", 4) == 0) {
+            data = bytes.data() + at + 8;
+            dataBytes = chunkSize;
         }
-        if (chunk_) {
-            Mix_FreeChunk(chunk_);
+        at += 8 + chunkSize + (chunkSize & 1);
+    }
+    if (!data || channels < 1 || channels > 2 || rate <= 0) {
+        return false;
+    }
+    int frames = int(dataBytes / (2 * channels));
+    // まず素材レートのステレオへ展開し、次に 44.1kHz へリサンプリングする。
+    std::vector<int16_t> src(size_t(frames) * 2);
+    for (int i = 0; i < frames; ++i) {
+        int16_t l = int16_t(data[2 * (i * channels)] | (data[2 * (i * channels) + 1] << 8));
+        int16_t r = channels == 2
+                        ? int16_t(data[2 * (i * channels) + 2] | (data[2 * (i * channels) + 3] << 8))
+                        : l;
+        src[size_t(i) * 2] = l;
+        src[size_t(i) * 2 + 1] = r;
+    }
+    if (rate == 44100) {
+        out = src;
+        return true;
+    }
+    int outFrames = int(int64_t(frames) * 44100 / rate);
+    out.resize(size_t(outFrames) * 2);
+    for (int i = 0; i < outFrames; ++i) {
+        double pos = double(i) * rate / 44100.0;
+        int i0 = int(pos);
+        int i1 = i0 + 1 < frames ? i0 + 1 : i0;
+        float fr = float(pos - i0);
+        for (int ch = 0; ch < 2; ++ch) {
+            float a = src[size_t(i0) * 2 + ch];
+            float b = src[size_t(i1) * 2 + ch];
+            out[size_t(i) * 2 + ch] = int16_t(a + (b - a) * fr);
         }
     }
-    void setSlip(float amount) override {
-        if (!chunk_) {
-            return;  // 音が出せない環境では黙って何もしない
+    return true;
+}
+
+// ピッチ違いループを作る。rate 倍の速さで読む = 音程が rate 倍。
+// 継ぎ目は末尾と先頭をクロスフェードしてクリック音を抑える。
+std::vector<int16_t> makePitchVariant(const std::vector<int16_t>& base, float rate) {
+    int inFrames = int(base.size() / 2);
+    int outFrames = int(inFrames / rate);
+    std::vector<int16_t> out(size_t(outFrames) * 2);
+    for (int i = 0; i < outFrames; ++i) {
+        double pos = double(i) * rate;
+        int i0 = int(pos) % inFrames;
+        int i1 = (i0 + 1) % inFrames;
+        float fr = float(pos - int(pos));
+        for (int ch = 0; ch < 2; ++ch) {
+            float a = base[size_t(i0) * 2 + ch];
+            float b = base[size_t(i1) * 2 + ch];
+            out[size_t(i) * 2 + ch] = int16_t(a + (b - a) * fr);
         }
-        if (amount < 0.03f) {
-            if (channel_ >= 0 && Mix_Playing(channel_)) {
-                Mix_HaltChannel(channel_);
+    }
+    const int fade = 1500;  // 約 34ms
+    if (outFrames > fade * 2) {
+        for (int j = 0; j < fade; ++j) {
+            float f = float(j) / float(fade);
+            int tail = outFrames - fade + j;
+            for (int ch = 0; ch < 2; ++ch) {
+                float a = out[size_t(tail) * 2 + ch];
+                float b = out[size_t(j) * 2 + ch];
+                out[size_t(tail) * 2 + ch] = int16_t(a * (1.0f - f) + b * f);
             }
+        }
+    }
+    return out;
+}
+
+class MixerAudio final : public IAudio {
+public:
+    MixerAudio() {
+        // エンジン: 定常ループから 6 段階のピッチ違いを用意する。
+        std::vector<int16_t> base;
+        std::string enginePath = findAsset("engine.wav");
+        if (!enginePath.empty() && loadWavStereo(enginePath, base) && base.size() > 8) {
+            const float rates[kEngineSteps] = {0.80f, 0.95f, 1.12f, 1.32f, 1.55f, 1.82f};
+            for (int i = 0; i < kEngineSteps; ++i) {
+                enginePcm_[i] = makePitchVariant(base, rates[i]);
+                engineChunks_[i] = Mix_QuickLoad_RAW(
+                    reinterpret_cast<uint8_t*>(enginePcm_[i].data()),
+                    uint32_t(enginePcm_[i].size() * sizeof(int16_t)));
+            }
+        }
+        // ドリフト: そのまま読み込む (Mixer が形式変換する)。
+        std::string driftPath = findAsset("drift.wav");
+        if (!driftPath.empty()) {
+            drift_ = Mix_LoadWAV(driftPath.c_str());
+        }
+    }
+    ~MixerAudio() override {
+        if (engineCh_ >= 0) Mix_HaltChannel(engineCh_);
+        if (driftCh_ >= 0) Mix_HaltChannel(driftCh_);
+        for (int i = 0; i < kEngineSteps; ++i) {
+            if (engineChunks_[i]) Mix_FreeChunk(engineChunks_[i]);
+        }
+        if (drift_) Mix_FreeChunk(drift_);
+    }
+
+    // エンジン音。rpm 0..1 が段 (ピッチ) を、load 0..1 が音量を決める。
+    // 両方 0 は「止める」の合図 (レース外)。
+    void setEngine(float rpm, float load) override {
+        if (!engineChunks_[0]) {
             return;
         }
-        if (channel_ < 0 || !Mix_Playing(channel_)) {
-            channel_ = Mix_PlayChannel(-1, chunk_, -1);  // 無限ループ
+        if (rpm <= 0.0f && load <= 0.0f) {
+            if (engineCh_ >= 0 && Mix_Playing(engineCh_)) {
+                Mix_HaltChannel(engineCh_);
+            }
+            engineStep_ = -1;
+            return;
         }
-        if (channel_ >= 0) {
-            int vol = int(25.0f + amount * 100.0f);
-            if (vol > MIX_MAX_VOLUME) vol = MIX_MAX_VOLUME;
-            Mix_Volume(channel_, vol);
+        int step = int(rpm * float(kEngineSteps));
+        if (step >= kEngineSteps) step = kEngineSteps - 1;
+        if (step < 0) step = 0;
+        if (step != engineStep_ || engineCh_ < 0 || !Mix_Playing(engineCh_)) {
+            if (engineCh_ >= 0 && Mix_Playing(engineCh_)) {
+                Mix_HaltChannel(engineCh_);
+            }
+            engineCh_ = Mix_PlayChannel(-1, engineChunks_[step], -1);
+            engineStep_ = step;
+        }
+        if (engineCh_ >= 0) {
+            int vol = int(26.0f + load * 58.0f + rpm * 36.0f);
+            if (vol > 118) vol = 118;
+            Mix_Volume(engineCh_, vol);
+        }
+    }
+
+    // ドリフト音 (ロケットスタート音源)。開始で鳴らし、強さで音量、
+    // 終わったら短くフェードアウト。鳴り終わっても強ければ鳴らし直す。
+    void setSlip(float amount) override {
+        if (!drift_) {
+            return;
+        }
+        bool playing = driftCh_ >= 0 && Mix_Playing(driftCh_);
+        if (amount >= 0.05f) {
+            if (!playing) {
+                driftCh_ = Mix_PlayChannel(-1, drift_, 0);
+            }
+            if (driftCh_ >= 0) {
+                int vol = int(30.0f + amount * 95.0f);
+                if (vol > 125) vol = 125;
+                Mix_Volume(driftCh_, vol);
+            }
+        } else if (playing) {
+            Mix_FadeOutChannel(driftCh_, 150);
         }
     }
 
 private:
-    Mix_Chunk* chunk_ = nullptr;  // 合成したスリップ音
-    int channel_ = -1;            // 再生中のチャンネル (-1 は未再生)
+    static constexpr int kEngineSteps = 6;             // ピッチの段数
+    std::vector<int16_t> enginePcm_[kEngineSteps];     // 段ごとの波形 (保持が必須)
+    Mix_Chunk* engineChunks_[kEngineSteps] = {};       // 段ごとの再生チャンク
+    Mix_Chunk* drift_ = nullptr;                       // ドリフト音
+    int engineCh_ = -1;                                // エンジン再生チャンネル
+    int driftCh_ = -1;                                 // ドリフト再生チャンネル
+    int engineStep_ = -1;                              // 現在の段
 };
 
 }  // namespace
