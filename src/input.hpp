@@ -24,6 +24,8 @@ struct PadPulse {
 // SDL イベントを翻訳した「UI の意図」。game はこれを見て状態を変える。
 struct UiActions {
     bool quit = false;          // 終了要求 (ウィンドウを閉じる / Esc)
+    bool confirm = false;       // 決定 (Enter / Space / パッド A・START / クリック)。
+                                // タイトルやリザルトでの「進む」に使う
     bool reset = false;         // R キー / パッド BACK
     bool pauseToggle = false;   // P キー / パッド START
     bool cameraNext = false;    // C キー (4 段階循環)

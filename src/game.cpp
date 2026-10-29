@@ -12,6 +12,9 @@
 
 #include "carmodel.hpp"  // buildCarNose / buildTailLamps
 #include "hud.hpp"       // Hud
+#include "racescene.hpp"    // RaceScene
+#include "resultscene.hpp"  // ResultScene
+#include "titlescene.hpp"   // TitleScene
 #include "input.hpp"     // input::pollUi / sampleDrive (ポート)
 #include "scenery.hpp"   // SceneryBuilder
 #include "tuning.hpp"    // tuneItems / serializeTuning
@@ -107,108 +110,57 @@ void Game::init() {
     wheel_ = renderer_->upload(wheel);
     shadow_ = renderer_->upload(shadow);
     car_.reset(track_);
+    switchScene(SceneId::Title);  // 起動直後はタイトルから
 }
 
-// 1 フレームの進行。dtSeconds は外側が測った経過時間。
+// シーンを実際に切り替える。前シーンの exit を呼んでから新しいシーンを
+// 作り、enter で初期化する。生成はここに集約し、増えたらここへ足す。
+void Game::switchScene(SceneId id) {
+    if (scene_) {
+        scene_->exit();
+    }
+    switch (id) {
+        case SceneId::Title: scene_ = std::make_unique<TitleScene>(*this); break;
+        case SceneId::Race: scene_ = std::make_unique<RaceScene>(*this); break;
+        case SceneId::Result: scene_ = std::make_unique<ResultScene>(*this); break;
+    }
+    scene_->enter();
+}
+
+// 1 フレームの進行。切り替え予約があればフレームの頭で切り替え、
+// あとは現在のシーンに委譲する (Game 自身は段取りを持たない)。
 void Game::frame(double dtSeconds) {
-    // --- 入力: イベントの解釈は入力アダプタ (外側) が済ませ、「意図」だけ届く ---
-    UiActions ui = input::pollUi(showTuning_);
-    if (ui.quit) {
-        running_ = false;
+    if (hasPendingScene_) {
+        hasPendingScene_ = false;
+        switchScene(pendingScene_);
     }
-    if (ui.tuningToggle) {
-        showTuning_ = !showTuning_;
+    if (scene_) {
+        scene_->frame(dtSeconds);
     }
-    if (showTuning_) {
-        // 調整パネル操作: 項目移動と値の増減。値はその場で物理へ反映され、
-        // 変更のたびに保存する (閉じ忘れても残るように)。
-        if (ui.tuneSelect != 0) {
-            tuneIndex_ = (tuneIndex_ + ui.tuneSelect + kTuneItemCount) % kTuneItemCount;
-        }
-        if (ui.tuneAdjust != 0.0f) {
-            TuneItem& item = tuneItems[tuneIndex_];
-            *item.value = clampf(*item.value + ui.tuneAdjust * item.step, item.lo, item.hi);
-            saveTuningNow();
-        }
-    }
-    bool reset = ui.reset;
-    if (ui.cameraNext) camera_.cycle(4);
-    if (ui.cameraNext3) camera_.cycle(3);
-    if (ui.pauseToggle) paused_ = !paused_;
-    if (ui.helpToggle) showHelp_ = !showHelp_;
-    if (ui.debugToggle) showDriftDebug_ = !showDriftDebug_;
-    if (ui.carSpec >= 0) applyCarSpec(ui.carSpec);
+}
 
-    PadPulse padPulse;
-    DriveInput input = input::sampleDrive(padPulse, car_.drifting);
-    lastInput_ = input;
-    if (showTuning_) {
-        input = DriveInput{};  // チューニング中は矢印キーを運転に使わない
+// FPS 表示の平滑化。瞬間値だと読みにくいので、少しずつ寄せる。
+void Game::noteFps(double elapsed) {
+    if (elapsed > 0.0001) {
+        fpsSm_ += float(1.0 / elapsed - fpsSm_) * 0.05f;
     }
-    if (padPulse.reset) reset = true;
-    if (padPulse.pause) paused_ = !paused_;
-    if (padPulse.camera) camera_.cycle(3);
-    if (reset) {
-        resetRace();
-    }
+}
 
-    // 経過時間の整形: 上限で頭打ちし、FPS 表示は平滑化して持つ。
-    double elapsed = dtSeconds;
-    if (elapsed > kMaxFrameSec) elapsed = kMaxFrameSec;
-    if (elapsed > 0.0001) fpsSm_ += float(1.0 / elapsed - fpsSm_) * 0.05f;
-    if (elapsed < 0) elapsed = 0;
-
-    // --- 物理: 固定 60Hz で進め、余りは補間に使う --------------------------
-    if (paused_) {
-        accumulator_ = 0;
-        viewX_ = car_.x; viewY_ = car_.y; viewZ_ = car_.z;
-        viewYaw_ = car_.yaw; viewSlip_ = car_.slipAngle;
-        viewReady_ = true;
-    } else {
-        prevX_ = car_.x; prevY_ = car_.y; prevZ_ = car_.z;
-        prevYaw_ = car_.yaw; prevSlip_ = car_.slipAngle;
-        accumulator_ += elapsed;
-        int guard = 0;
-        while (accumulator_ >= kFixedStepSec && guard < 8) {
-            car_.update(float(kFixedStepSec), input, track_);
-            race_.tick(car_.ground.s, track_.length, float(kFixedStepSec));
-            accumulator_ -= kFixedStepSec;
-            ++guard;
-        }
-        // 描画ポーズの補間: 1 ステップ前と現在を端数でつなぐ。
-        float alpha = float(accumulator_ / kFixedStepSec);
-        float dx = car_.x - prevX_;
-        float dz = car_.z - prevZ_;
-        if (dx * dx + dz * dz > 400.0f) alpha = 1.0f;  // リセット等のテレポートでは補間しない
-        viewX_ = prevX_ + (car_.x - prevX_) * alpha;
-        viewY_ = prevY_ + (car_.y - prevY_) * alpha;
-        viewZ_ = prevZ_ + (car_.z - prevZ_) * alpha;
-        float dyaw = car_.yaw - prevYaw_;
-        while (dyaw > 3.14159265f) dyaw -= 6.2831853f;
-        while (dyaw < -3.14159265f) dyaw += 6.2831853f;
-        viewYaw_ = prevYaw_ + dyaw * alpha;
-        viewSlip_ = prevSlip_ + (car_.slipAngle - prevSlip_) * alpha;
-        viewReady_ = true;
-    }
-    // --- 演出とカメラ -------------------------------------------------------
-    if (!paused_) {
-        effects_.update(car_, float(elapsed));
-    }
-    camera_.update({viewX_, viewY_, viewZ_}, viewYaw_, viewSlip_, car_.driftAmount,
-                   track_, car_.ground.s, float(elapsed));
-
-    // --- 描画 ---------------------------------------------------------------
-    // 画面サイズの反映と表示 (Swap) は外側 (platform のループ) の担当。
-    // ここでは renderer が保持する現在サイズで画角だけを決める。
+// ワールド描画の開始: 画面を消し、空を描き、投影と視点を設定する。
+// 画面サイズの反映と表示 (Swap) は外側 (platform のループ) の担当。
+void Game::beginWorldDraw() {
     renderer_->clearFrame();
     renderer_->drawSky();
-
     float aspect = float(renderer_->width()) /
                    float(renderer_->height() > 0 ? renderer_->height() : 1);
     Mat4 proj = perspective(60.0f * 3.14159265f / 180.0f, aspect, 0.15f, 2200.0f);
     Mat4 view = lookAt(camera_.eye, camera_.look, {0, 1, 0});
     renderer_->beginWorld(mul(proj, view), camera_.eye);
+}
 
+// ワールド本体の描画 (背景・景観・タイヤ痕・影・車体・ホイール)。
+// タイトル／レース／リザルトで共通。carPos/carYaw は描画用ポーズ。
+void Game::drawWorld(Vec3 carPos, float carYaw) {
     Mat4 identity;
     renderer_->draw(backdrop_, identity);
     // 景観はチャンク単位で距離カリング (1000m 以内だけ描く)。
@@ -219,21 +171,20 @@ void Game::frame(double dtSeconds) {
     }
     // タイヤ痕は路面に残るものなので、車より先 (景観の直後) に描く。
     effects_.drawMarks(*renderer_);
-    Mat4 shadow = mul(translation(viewX_, viewY_ + 0.08f, viewZ_), rotationY(viewYaw_));
+    Mat4 shadow = mul(translation(carPos.x, carPos.y + 0.08f, carPos.z), rotationY(carYaw));
     if (camera_.mode != 3) renderer_->draw(shadow_, shadow);
 
     // 車体の傾きは路面の平面に這わせる。前後・左右 4 点の路面高から
     // 面の傾きを求めるので、斜めに止まってもバンクと勾配の両方に合う。
     // 傾き自体は荷重移動として少し遅れて追わせる (即応するとカクつく)。
     {
-        Vec3 pos{viewX_, viewY_, viewZ_};
-        Vec3 fw{std::sin(viewYaw_), 0, std::cos(viewYaw_)};
+        Vec3 fw{std::sin(carYaw), 0, std::cos(carYaw)};
         Vec3 rt{fw.z, 0, -fw.x};
         float preferS = car_.ground.found ? car_.ground.s : -1.0f;
-        float hF = surfaceHeightAt(track_, pos + fw * 2.2f, car_.y, preferS);
-        float hB = surfaceHeightAt(track_, pos - fw * 2.2f, car_.y, preferS);
-        float hR = surfaceHeightAt(track_, pos + rt * 1.0f, car_.y, preferS);
-        float hL = surfaceHeightAt(track_, pos - rt * 1.0f, car_.y, preferS);
+        float hF = surfaceHeightAt(track_, carPos + fw * 2.2f, car_.y, preferS);
+        float hB = surfaceHeightAt(track_, carPos - fw * 2.2f, car_.y, preferS);
+        float hR = surfaceHeightAt(track_, carPos + rt * 1.0f, car_.y, preferS);
+        float hL = surfaceHeightAt(track_, carPos - rt * 1.0f, car_.y, preferS);
         float pitchT = std::atan2(hF - hB, 4.4f);
         float rollT = std::atan2(hR - hL, 2.0f) -
                       clampf(car_.lateralSpeed * 0.009f, -0.12f, 0.12f);
@@ -242,7 +193,7 @@ void Game::frame(double dtSeconds) {
         bodyRollSm_ += (rollT - bodyRollSm_) * k;
     }
     Car viewCar = car_;
-    viewCar.x = viewX_; viewCar.y = viewY_; viewCar.z = viewZ_; viewCar.yaw = viewYaw_;
+    viewCar.x = carPos.x; viewCar.y = carPos.y; viewCar.z = carPos.z; viewCar.yaw = carYaw;
     Mat4 model = carModelMatrix(viewCar, bodyPitchSm_, bodyRollSm_);
     model = mul(translation(0, 0.05f, 0), model);  // 平面に這わせた際の角のめり込み防止
     if (camera_.mode == 3) {
@@ -265,7 +216,10 @@ void Game::frame(double dtSeconds) {
             renderer_->draw(wheel_, mul(model, place));
         }
     }
+}
+
+// 煙と光跡の描画 (車の後、HUD の前)。
+void Game::drawEffects() {
     effects_.drawSmoke(*renderer_, camera_);
     effects_.drawTrails(*renderer_);
-    hud_->draw(*this);
 }

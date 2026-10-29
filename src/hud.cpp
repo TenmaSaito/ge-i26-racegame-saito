@@ -11,6 +11,7 @@
 #include "car.hpp"
 #include "game.hpp"
 #include "input.hpp"  // input::padStatus (パッド認識状態)
+#include "scene.hpp"   // kRaceLaps
 #include "render.hpp"
 #include "tuning.hpp"
 
@@ -341,3 +342,68 @@ void Hud::draw(Game& app) {
     hud.flushHud();
 }
 
+
+// タイトル画面の文字。背景はアトラクトカメラのワールド描画で、
+// ここは大会名・コース名・決定の案内・操作説明だけを重ねる。
+void Hud::drawTitle(Game& app, float t) {
+    IRenderer& hud = *app.renderer();
+    hud.beginHud();
+    const float W = float(hud.width());
+    const float H = float(hud.height());
+    // 全体を少し暗くして文字を読みやすくする。
+    hud.addQuad(0, 0, W, H, 0.02f, 0.04f, 0.08f, 0.35f);
+    auto centerText = [&](float y, float scale, const char* text, float r, float g, float b) {
+        float w = float(std::strlen(text)) * 6.0f * scale;
+        hud.drawText((W - w) * 0.5f, y, scale, text, r, g, b, 1);
+    };
+    centerText(H * 0.14f, 2.0f, "DRIFT RACE", 0.85f, 0.88f, 0.92f);
+    centerText(H * 0.22f, 5.0f, app.title().c_str(), 1.0f, 0.95f, 0.9f);
+    char line[96];
+    std::snprintf(line, sizeof(line), "%d LAPS RACE", kRaceLaps);
+    centerText(H * 0.40f, 2.2f, line, 0.95f, 0.85f, 0.6f);
+    // 決定の案内は点滅させる（目に留まりやすくするため）。
+    if (std::sin(t * 3.2f) > -0.3f) {
+        centerText(H * 0.52f, 2.6f, "PRESS ENTER / CLICK / PAD START", 1.0f, 1.0f, 1.0f);
+    }
+    centerText(H * 0.68f, 1.8f, "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE DRIFT", 0.8f, 0.84f, 0.88f);
+    centerText(H * 0.68f + 30.0f, 1.8f, "PAD: L-STICK STEER  R-STICK / B DRIFT  RT/LT PEDALS", 0.8f, 0.84f, 0.88f);
+    std::snprintf(line, sizeof(line), "CAR: %s  [1/2/3 IN RACE]", kCarSpecs[app.carSpec()].name);
+    centerText(H * 0.68f + 60.0f, 1.8f, line, 0.8f, 0.84f, 0.88f);
+    hud.flushHud();
+}
+
+// リザルト画面の文字。Race が保持する合計・ベスト・直近ラップを出す。
+void Hud::drawResult(Game& app, float t) {
+    IRenderer& hud = *app.renderer();
+    hud.beginHud();
+    const float W = float(hud.width());
+    const float H = float(hud.height());
+    const Race& race = app.race();
+    // 中央パネル (タイム一覧の土台)。
+    const float pw = 580.0f;
+    const float ph = 340.0f;
+    const float px = (W - pw) * 0.5f;
+    const float py = (H - ph) * 0.5f;
+    hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.88f);
+    auto centerText = [&](float y, float scale, const char* text, float r, float g, float b) {
+        float w = float(std::strlen(text)) * 6.0f * scale;
+        hud.drawText((W - w) * 0.5f, y, scale, text, r, g, b, 1);
+    };
+    centerText(py + 24, 4.4f, "FINISH!", 1.0f, 0.85f, 0.4f);
+    char line[96];
+    char time[32];
+    formatTime(time, sizeof(time), race.total());
+    std::snprintf(line, sizeof(line), "TOTAL     %s", time);
+    centerText(py + 116, 2.6f, line, 0.95f, 0.96f, 0.98f);
+    formatTime(time, sizeof(time), race.best());
+    std::snprintf(line, sizeof(line), "BEST LAP  %s", time);
+    centerText(py + 162, 2.6f, line, 0.95f, 0.85f, 0.5f);
+    formatTime(time, sizeof(time), race.lastLap());
+    std::snprintf(line, sizeof(line), "LAST LAP  %s", time);
+    centerText(py + 208, 2.6f, line, 0.85f, 0.88f, 0.92f);
+    // 行き先の案内は点滅させる。
+    if (std::sin(t * 3.2f) > -0.3f) {
+        centerText(py + ph - 54, 2.0f, "ENTER: RACE AGAIN    T: TITLE", 1.0f, 1.0f, 1.0f);
+    }
+    hud.flushHud();
+}

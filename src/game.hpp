@@ -15,6 +15,7 @@
 #include "effects.hpp"  // Effects (煙・光跡・タイヤ痕)
 #include "race.hpp"     // Race (周回・計時)
 #include "render.hpp"   // IRenderer (ポート), GpuMesh
+#include "scene.hpp"    // IScene / SceneId
 #include "track.hpp"    // Track
 
 #include <functional>
@@ -22,7 +23,8 @@
 #include <string>
 #include <vector>
 
-class Hud;  // HUD 描画器 (hud.hpp)。Game が 1 つ保持する
+class Hud;     // HUD 描画器 (hud.hpp)。Game が 1 つ保持する
+class IScene;  // 現在のシーン (scene.hpp の基底)
 
 class Game {
 public:
@@ -47,17 +49,50 @@ public:
     // --- 進行 --------------------------------------------------------------
     const std::string& title() const { return title_; }
     // 初期化: メッシュ構築と GPU アップロード、車両リセット。
-    // renderer の差し込みが済んでいる前提で呼ぶ。
+    // renderer の差し込みが済んでいる前提で呼ぶ。最後にタイトルシーンへ入る。
     void init();
-    // 1 フレームの進行 (入力→物理→演出→カメラ→描画)。
+    // 1 フレームの進行。実処理は現在のシーン (IScene) が行い、Game は
+    // シーン切り替えの予約処理だけをして委譲する。
     // 経過時間は外側 (platform のループ) が測って渡す。
     void frame(double dtSeconds);
     bool running() const { return running_; }  // 終了要求が出たら false
+    void requestQuit() { running_ = false; }   // シーンからの終了要求
+    // シーン切り替えの予約 (実際の切り替えは次の frame の頭で安全に行う)。
+    void requestScene(SceneId id) {
+        pendingScene_ = id;
+        hasPendingScene_ = true;
+    }
+
+    // --- シーンから使う共通サービス -----------------------------------------
+    Hud& hud() { return *hud_; }              // HUD 描画器
+    Effects& effects() { return effects_; }   // 演出 (煙・光跡・タイヤ痕)
+    // レースを初期状態に戻す (車・計時・演出・カメラをまとめて)。
+    void resetRace();
+    // 現在のチューニング値を差し込み口経由で保存する (シーンからの依頼用)。
+    void saveTuningNow();
+    // FPS 表示の平滑化 (シーンが毎フレーム知らせる)。
+    void noteFps(double elapsed);
+    // ワールド描画の開始 (画面消去・空・投影と視点の設定)。
+    void beginWorldDraw();
+    // ワールド本体の描画 (背景・景観・タイヤ痕・影・車体)。
+    // carPos/carYaw は描画用の車ポーズ (レースでは補間ポーズを渡す)。
+    void drawWorld(Vec3 carPos, float carYaw);
+    // 煙と光跡の描画 (ワールド描画の後、HUD の前)。
+    void drawEffects();
+
+    // --- セッション状態の設定 (シーンが操作する表示・進行フラグ) -------------
+    void setPaused(bool v) { paused_ = v; }
+    void setShowHelp(bool v) { showHelp_ = v; }
+    void setShowDriftDebug(bool v) { showDriftDebug_ = v; }
+    void setShowTuning(bool v) { showTuning_ = v; }
+    void setTuneIndex(int v) { tuneIndex_ = v; }
+    void setLastInput(const DriveInput& in) { lastInput_ = in; }
 
     // --- 協働モジュール向けの参照 -------------------------------------------
     Car& car() { return car_; }
     const Car& car() const { return car_; }
     const Track& track() const { return track_; }
+    Race& race() { return race_; }
     const Race& race() const { return race_; }
     Orbit& camera() { return camera_; }
     const Orbit& camera() const { return camera_; }
@@ -74,10 +109,8 @@ public:
     void applyCarSpec(int index);
 
 private:
-    // レースを初期状態に戻す (車・計時・演出・カメラをまとめて)。
-    void resetRace();
-    // 現在のチューニング値を差し込み口経由で保存する。
-    void saveTuningNow();
+    // シーンを実際に切り替える (exit → 生成 → enter)。
+    void switchScene(SceneId id);
 
     // --- 基本情報 ---
     std::string title_;  // ウィンドウタイトル (コース名)
@@ -86,7 +119,10 @@ private:
     Race race_;          // 周回・計時
     Orbit camera_;       // カメラ状態
     Effects effects_;    // 煙・光跡・タイヤ痕
-    std::unique_ptr<Hud> hud_;  // HUD 描画器 (ミニマップ等の表示状態を持つ)
+    std::unique_ptr<Hud> hud_;      // HUD 描画器 (ミニマップ等の表示状態を持つ)
+    std::unique_ptr<IScene> scene_;  // 現在のシーン (タイトル／レース／リザルト)
+    SceneId pendingScene_ = SceneId::Title;  // 切り替え予約
+    bool hasPendingScene_ = false;           // 予約があるか
 
     // --- ポートと差し込み (実物は外側が持つ) ---
     IRenderer* renderer_ = nullptr;  // 描画実装 (借用)
@@ -115,14 +151,9 @@ private:
     int carSpec_ = 0;             // 選択中の車種 (1/2/3 キー)
     DriveInput lastInput_;        // 直近の運転入力 (デバッグ表示用に保持)
     float fpsSm_ = 60.0f;         // FPS 表示 (平滑化済み)
-    double accumulator_ = 0;      // 物理固定ステップ (60Hz) の端数貯金
 
-    // --- 描画用の補間ポーズ ---
-    // 物理は固定 60Hz で進むため、そのまま描くと表示タイミングとのずれで
-    // 前後にガクつく。1 ステップ前と現在をアキュムレータの端数で補間する。
-    float prevX_ = 0, prevY_ = 0, prevZ_ = 0, prevYaw_ = 0, prevSlip_ = 0;  // 1 ステップ前
-    float viewX_ = 0, viewY_ = 0, viewZ_ = 0, viewYaw_ = 0, viewSlip_ = 0;  // 補間結果
-    bool viewReady_ = false;      // 補間ポーズが有効か
+    // 車体の傾き (drawWorld が路面平面から求めて平滑化する)。
+    // 補間ポーズや物理のアキュムレータは RaceScene 側の状態になった。
     float bodyPitchSm_ = 0;       // 車体の前後傾き (平滑化済み)
     float bodyRollSm_ = 0;        // 車体の左右傾き (平滑化済み)
 };

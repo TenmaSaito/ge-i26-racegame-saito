@@ -6,6 +6,8 @@ void Race::reset() {
     timing_ = false;
     lap_ = 0;
     best_ = -1;
+    lastLap_ = -1;
+    total_ = 0;
     prevS_ = -1;
 }
 
@@ -19,6 +21,8 @@ void Race::tick(float s, float length, float dt) {
                 if (best_ < 0 || lap_ < best_) {
                     best_ = lap_;
                 }
+                lastLap_ = lap_;
+                total_ += lap_;
                 completed_ += 1;
             }
             timing_ = true;

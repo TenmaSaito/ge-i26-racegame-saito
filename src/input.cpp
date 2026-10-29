@@ -132,7 +132,9 @@ UiActions pollUi(bool tuningOpen) {
                     ui.tuneAdjust = dir * fast;
                 }
             } else if (!event.key.repeat) {
-                if (code == SDL_SCANCODE_ESCAPE) ui.quit = true;
+                if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER ||
+                    code == SDL_SCANCODE_SPACE) ui.confirm = true;
+                else if (code == SDL_SCANCODE_ESCAPE) ui.quit = true;
                 else if (code == SDL_SCANCODE_R) ui.reset = true;
                 else if (code == SDL_SCANCODE_C) ui.cameraNext = true;
                 else if (code == SDL_SCANCODE_P) ui.pauseToggle = true;
@@ -150,8 +152,11 @@ UiActions pollUi(bool tuningOpen) {
             closePad();
         } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
             if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) ui.reset = true;
-            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) ui.pauseToggle = true;
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) { ui.pauseToggle = true; ui.confirm = true; }
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A) ui.confirm = true;
             else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_Y) ui.cameraNext3 = true;
+        } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+            ui.confirm = true;  // タイトル等でのクリック = 決定
         }
     }
     return ui;

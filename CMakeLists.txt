@@ -40,6 +40,9 @@ add_executable(racegame
     src/main.cpp
     src/platform.cpp
     src/race.cpp
+    src/titlescene.cpp
+    src/racescene.cpp
+    src/resultscene.cpp
     src/game.cpp
     src/input.cpp
     src/camera.cpp

@@ -13,8 +13,12 @@ void formatTime(char* buf, int size, float seconds);
 
 class Hud {
 public:
-    // HUD 全体を描く (Game::frame の最後に呼ばれる)。
+    // HUD 全体を描く (レースシーンの最後に呼ばれる)。
     void draw(Game& app);
+    // タイトル画面の文字 (t は点滅用の経過秒)。
+    void drawTitle(Game& app, float t);
+    // リザルト画面の文字 (タイムと行き先の案内)。
+    void drawResult(Game& app, float t);
 
 private:
     void drawMinimap(Game& app);       // コース全体図と自車マーカー

@@ -17,11 +17,15 @@ public:
     bool timing() const { return timing_; }       // 計測中か (1 周目は OUT LAP)
     float lap() const { return lap_; }            // 現在の周回タイム (秒)
     float best() const { return best_; }          // ベストラップ (未記録は -1)
+    float lastLap() const { return lastLap_; }    // 直近に完了した周のタイム
+    float total() const { return total_; }        // 完了周回の合計タイム (リザルト用)
 
 private:
     int completed_ = 0;    // 完了周回数
     bool timing_ = false;  // スタートラインを初めて越えたら計測開始
     float lap_ = 0;        // 現在周の経過秒
     float best_ = -1;      // ベストラップ秒 (-1 は未記録)
+    float lastLap_ = -1;   // 直近の完了ラップ秒
+    float total_ = 0;      // 完了ラップの合計秒
     float prevS_ = -1;     // 前ステップの s (巻き戻り検出用、-1 は未設定)
 };
