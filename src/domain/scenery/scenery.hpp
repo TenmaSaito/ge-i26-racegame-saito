@@ -93,6 +93,9 @@ public:
     std::vector<SceneryChunk> build(ObjectManager& objects, int samplesPerChunk = 120) const;
     // 背景の山並み（コースをぐるりと囲む稜線リング）。スカイボックス代わり。
     CpuMesh buildBackdrop() const;
+    // 地形の高さ (x, z 地点)。コース近傍は路面中心の高さに張り付き、
+    // 離れるほど滑らかな丘陵が盛り上がる。木や基礎の接地にも使う。
+    float terrainHeightAt(float x, float z) const;
 
 private:
     const Track& track_;

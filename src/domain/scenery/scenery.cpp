@@ -147,7 +147,6 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
     for (const TrackSample& s : track_.samples) {
         minY = std::min(minY, s.y);
     }
-    const float groundY = minY - 5.0f;
     const int chunkCount = (n + samplesPerChunk - 1) / samplesPerChunk;
     std::vector<SceneryChunk> chunks;
     chunks.resize(size_t(chunkCount));
@@ -171,6 +170,18 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
                     const float scale = 0.6f + float((h >> 16) % 100u) / 100.0f * 1.5f;
                     objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
                                                  SceneryKind::Tree, pos, scale, h, ci);
+                }
+            }
+            // 丘の木: 平らな帯の外 (180〜680m) にもまばらに生やす。
+            // 地形の上に立つので、高さは terrainHeightAt で決める。
+            if (i % 11 == 0 && (h % 100u) < 70u) {
+                const float lat = 180.0f + float((h >> 3) % 100u) / 100.0f * 500.0f;
+                Vec3 pos = pointAt(i, side * lat);
+                pos.y = terrainHeightAt(pos.x, pos.z);
+                if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
+                    const float scale = 0.9f + float((h >> 16) % 100u) / 100.0f * 1.8f;
+                    objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
+                                                 SceneryKind::Tree, pos, scale, h ^ 0x51u, ci);
                 }
             }
             // 建物: 約 110m 間隔の候補から 6 割、芝の外 20〜50m
@@ -205,7 +216,10 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
     // 実体の一覧が唯一の正で、メッシュはそこから作る従属物という関係。
     const std::vector<SceneryInstance*> instances = objects.findAllOfType<SceneryInstance>();
     for (SceneryInstance* inst : instances) {
-        inst->bake(chunks[size_t(inst->chunk())].mesh, groundY);
+        // 基礎の届き先は、その場所の地形の高さ (一枚板の時代の名残の
+        // 全体一律ではなく、場所ごとに合わせる)。
+        const float g = terrainHeightAt(inst->pos().x, inst->pos().z) - 0.4f;
+        inst->bake(chunks[size_t(inst->chunk())].mesh, g);
     }
     for (int c = 0; c < chunkCount; ++c) {
         const int from = c * samplesPerChunk;
@@ -250,48 +264,110 @@ void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, fl
     }
 }
 
-// コースを囲む山並み。中心から見た稜線をギザギザの帯で作る。
-// 近い側は霞越しに稜線が見え、遠い側は霧に溶ける（スカイボックス相当の役割）。
+// ============================================================================
+// 地形 (山) ― コースに沿うリボン状の高度場メッシュ
+// 考え方: 高さは「最寄りのコース地点からの横距離」で決める。近くは路面
+// 中心の高さに張り付いて平ら (木・建物・住宅が立つ帯)、そこから先は
+// 滑らかな関数で盛り上がって丘陵になり、視界の奥を山が塞ぐ。
+// 頂点の高さは必ず terrainHeightAt (最寄り基準) で決めるので、コースが
+// 自分に近づく場所 (鈴鹿のクロスオーバー等) でも山が路面を突き破らない。
+// ============================================================================
+
+float SceneryBuilder::terrainHeightAt(float x, float z) const {
+    // 高さのヒント無しで引くと、立体交差するコースでは別の区間を掴む。
+    // 一度引いて得た中心高をヒントに引き直し、上下に近い区間へ寄せる。
+    TrackPose q = track_.query(x, z, 0.0f, -1.0f);
+    q = track_.query(x, z, q.centerY, -1.0f);
+    if (!q.found) {
+        return 0.0f;
+    }
+    const float lat = std::fabs(q.lateral);
+    const float flatEnd = 150.0f;    // 平らな帯の外端 (住宅街まで収まる)
+    const float farEnd = 1600.0f;    // 盛り上がりが頭打ちになる距離
+    if (lat <= flatEnd) {
+        return q.centerY;
+    }
+    const float t = q.s / track_.length;  // コース周回位置 0..1 (周期ノイズ用)
+    const float u = (lat - flatEnd) / (farEnd - flatEnd);  // 0→1
+    // 周期的なうねり (周回で継ぎ目が出ないよう t の整数周期サインで作る)。
+    const float n = 0.55f * std::sin(6.2831853f * 3.0f * t + 2.0f * std::sin(lat * 0.004f)) +
+                    0.30f * std::sin(6.2831853f * 8.0f * t - lat * 0.006f) +
+                    0.15f * std::sin(6.2831853f * 17.0f * t + lat * 0.011f);
+    const float rise = std::pow(u, 1.35f) * 150.0f * (0.82f + 0.33f * n);
+    // 中距離のなだらかな起伏も足して単調さを消す。
+    const float mid = std::pow(std::min((lat - flatEnd) / 400.0f, 1.0f), 2.0f) *
+                      30.0f * (0.7f + 0.3f * std::sin(6.2831853f * 5.0f * t + lat * 0.008f));
+    return q.centerY + rise + mid;
+}
+
 CpuMesh SceneryBuilder::buildBackdrop() const {
     CpuMesh mesh;
-    float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f, minY = 1e9f;
-    for (const TrackSample& s : track_.samples) {
-        minX = std::min(minX, s.x); maxX = std::max(maxX, s.x);
-        minZ = std::min(minZ, s.z); maxZ = std::max(maxZ, s.z);
-        minY = std::min(minY, s.y);
+    const int n = int(track_.samples.size());
+    // 横方向の列 (中心線からの距離)。平らな帯 → 緩い丘 → 遠くの山。
+    const float start = track_.halfWidth + 0.5f;
+    const float lats[] = {start, 40.0f, 90.0f, 150.0f, 230.0f, 340.0f,
+                          520.0f, 780.0f, 1150.0f, 1600.0f};
+    const int cols = int(sizeof(lats) / sizeof(lats[0]));
+    const int step = 2;  // サンプルを 1 つ飛ばしで使う (頂点数を抑える)
+    const int rows = (n + step - 1) / step;
+    // 頂点を [行][左右][列] の順に並べ、滑らかな法線を付けて登録する。
+    std::vector<std::uint32_t> grid;
+    grid.reserve(size_t(rows) * 2 * size_t(cols));
+    for (int r = 0; r < rows; ++r) {
+        const int i = std::min(r * step, n - 1);
+        for (int s = -1; s <= 1; s += 2) {
+            for (int cix = 0; cix < cols; ++cix) {
+                Vec3 p = pointAt(i, float(s) * lats[cix]);
+                p.y = terrainHeightAt(p.x, p.z);
+                // 法線は高度場の勾配から (有限差分)。面ではなく頂点法線なので
+                // 坂が滑らかに陰影する。
+                const float e = 6.0f;
+                float hx = terrainHeightAt(p.x + e, p.z) - terrainHeightAt(p.x - e, p.z);
+                float hz = terrainHeightAt(p.x, p.z + e) - terrainHeightAt(p.x, p.z - e);
+                Vec3 normal = normalize(Vec3{-hx, 2.0f * e, -hz});
+                // 色: 平地は草、斜面と高所は岩、頂上付近は雪。森の斑も混ぜる。
+                TrackPose q = track_.query(p.x, p.z, p.y, -1.0f);
+                float relief = p.y - q.centerY;
+                float slope = 1.0f - normal.y;
+                Vec3 col{0.16f, 0.34f, 0.13f};
+                float forest = std::sin(p.x * 0.013f) * std::sin(p.z * 0.017f);
+                if (forest > 0.3f) {
+                    col = Vec3{0.11f, 0.27f, 0.10f};
+                }
+                float rockMix = std::min(1.0f, std::max(0.0f, (slope - 0.10f) * 3.0f));
+                if (relief > 50.0f) {
+                    rockMix = std::max(rockMix, std::min(1.0f, (relief - 50.0f) / 60.0f));
+                }
+                col = col * (1.0f - rockMix) + Vec3{0.47f, 0.44f, 0.40f} * rockMix;
+                if (relief > 95.0f) {
+                    float snow = std::min(1.0f, (relief - 95.0f) / 40.0f);
+                    col = col * (1.0f - snow) + Vec3{0.87f, 0.89f, 0.93f} * snow;
+                }
+                unsigned jh = treeHash(i * 3 + cix, float(s));
+                float jitter = 0.96f + float((jh >> 12) % 100u) / 100.0f * 0.08f;
+                grid.push_back(uint32_t(mesh.vertices.size() / 9));
+                mesh.addVertex(p, normal, col * jitter);
+            }
+        }
     }
-    // 地面の大きな一枚板（路面チャンク側から移設。常時描く）。
-    {
-        const float pad = 120.0f;
-        const float gy = minY - 4.0f;
-        const Vec3 gcol{0.12f, 0.27f, 0.11f};
-        Vec3 a{minX - pad, gy, minZ - pad};
-        Vec3 b{maxX + pad, gy, minZ - pad};
-        Vec3 c{maxX + pad, gy, maxZ + pad};
-        Vec3 d{minX - pad, gy, maxZ + pad};
-        mesh.addQuad(a, d, c, b, {0, 1, 0}, gcol);
-    }
-    const Vec3 center{(minX + maxX) * 0.5f, 0, (minZ + maxZ) * 0.5f};
-    const float baseRadius = std::max(maxX - minX, maxZ - minZ) * 0.5f;
-    const int seg = 72;
-    const Vec3 colA{0.38f, 0.47f, 0.46f};
-    const Vec3 colB{0.33f, 0.42f, 0.44f};
-    auto ridgeAt = [&](int k) {
-        unsigned h = treeHash(k * 7 + 3, 1.0f);
-        float ang = float(k) / float(seg) * 6.2831853f;
-        float r = baseRadius + 950.0f + float((h >> 9) % 100u) / 100.0f * 300.0f;
-        float y = minY + 55.0f + float((h >> 17) % 100u) / 100.0f * 95.0f;
-        return Vec3{center.x + std::sin(ang) * r, y, center.z + std::cos(ang) * r};
+    auto idx = [&](int r, int side, int cix) {
+        return grid[(size_t(r) * 2 + size_t(side)) * size_t(cols) + size_t(cix)];
     };
-    for (int k = 0; k < seg; ++k) {
-        Vec3 p0 = ridgeAt(k);
-        Vec3 p1 = ridgeAt(k + 1);
-        Vec3 b0{p0.x, minY - 40.0f, p0.z};
-        Vec3 b1{p1.x, minY - 40.0f, p1.z};
-        Vec3 n = normalize(Vec3{-(p0.x + p1.x) * 0.5f + center.x, 0,
-                                -(p0.z + p1.z) * 0.5f + center.z});
-        const Vec3 c = (k % 2 == 0) ? colA : colB;
-        mesh.addQuad(b0, b1, p1, p0, n, c);
+    for (int r = 0; r < rows; ++r) {
+        const int r2 = (r + 1) % rows;
+        for (int side = 0; side < 2; ++side) {
+            for (int cix = 0; cix + 1 < cols; ++cix) {
+                std::uint32_t a = idx(r, side, cix), b = idx(r, side, cix + 1);
+                std::uint32_t cc = idx(r2, side, cix + 1), d = idx(r2, side, cix);
+                if (side == 0) {
+                    mesh.addRawTriangle(a, b, cc);
+                    mesh.addRawTriangle(a, cc, d);
+                } else {
+                    mesh.addRawTriangle(a, cc, b);
+                    mesh.addRawTriangle(a, d, cc);
+                }
+            }
+        }
     }
     return mesh;
 }

@@ -10,6 +10,7 @@
 #include "effects.hpp"  // タイヤ痕の生成テスト用
 #include "ghost.hpp"    // Ghost の検証用
 #include "object.hpp"   // ObjectManager の検証用
+#include "scenery.hpp"  // SceneryBuilder (地形) の検証用
 #include "track.hpp"
 
 #include <cmath>
@@ -209,6 +210,20 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
     if (travelled < 1200.0f) return 3;
     if (maxLat > 30.0f) return 4;
     if (!std::isfinite(car.y)) return 6;
+    // 地形: コース脇は路面中心と同じ高さ、遠方は山として盛り上がること。
+    {
+        SceneryBuilder builder(track);
+        CpuMesh terrain = builder.buildBackdrop();
+        std::printf("self-test terrain tris %d\n", int(terrain.indices.size() / 3));
+        if (terrain.indices.size() < 3000) return 15;
+        const TrackSample& s0 = track.samples[100];
+        TrackPose g0 = track.query(s0.x, s0.z, s0.y);
+        float near = builder.terrainHeightAt(s0.x, s0.z);
+        float far = builder.terrainHeightAt(s0.x + g0.rightX * 800.0f, s0.z + g0.rightZ * 800.0f);
+        std::printf("self-test terrain near %.1f far %.1f (center %.1f)\n", near, far, g0.centerY);
+        if (std::fabs(near - g0.centerY) > 0.01f) return 16;
+        if (far < g0.centerY + 25.0f) return 17;
+    }
     // 火花: 壁に擦らせた車を与えると火花が出ること。
     {
         Effects fx;
