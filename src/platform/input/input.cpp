@@ -131,6 +131,17 @@ UiActions pollUi(bool tuningOpen) {
                     float fast = (SDL_GetModState() & KMOD_SHIFT) ? 5.0f : 1.0f;
                     ui.tuneAdjust = dir * fast;
                 }
+            } else if (code == SDL_SCANCODE_UP || code == SDL_SCANCODE_W) {
+                // メニュー操作 (セレクト画面等)。チューニングが閉じている間は
+                // 矢印/WASD を選択の意図として拾う。運転中は RaceScene が
+                // この意図を読まないので、走行への影響はない。
+                ui.tuneSelect = -1;
+            } else if (code == SDL_SCANCODE_DOWN || code == SDL_SCANCODE_S) {
+                ui.tuneSelect = 1;
+            } else if (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_A) {
+                ui.tuneAdjust = -1.0f;
+            } else if (code == SDL_SCANCODE_RIGHT || code == SDL_SCANCODE_D) {
+                ui.tuneAdjust = 1.0f;
             } else if (!event.key.repeat) {
                 if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER ||
                     code == SDL_SCANCODE_SPACE) ui.confirm = true;
@@ -155,6 +166,11 @@ UiActions pollUi(bool tuningOpen) {
             else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) { ui.pauseToggle = true; ui.confirm = true; }
             else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A) ui.confirm = true;
             else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_Y) ui.cameraNext3 = true;
+            // 十字キーもメニュー操作として同じ意図に流す。
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) ui.tuneSelect = -1;
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) ui.tuneSelect = 1;
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) ui.tuneAdjust = -1.0f;
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ui.tuneAdjust = 1.0f;
         } else if (event.type == SDL_MOUSEBUTTONDOWN) {
             ui.click = true;  // 決定とは分ける (フォーカス取りのクリックで誤爆しないため)
         }
