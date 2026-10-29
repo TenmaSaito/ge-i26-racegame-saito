@@ -33,11 +33,22 @@ public:
     // 経過 t 秒時点のポーズを補間して返す。範囲外なら false。
     bool poseAt(float t, Vec3& pos, float& yaw) const;
 
+    // 光跡の 1 点 (再生側でリボン化する)。age が負の点は「ここで帯を切る」
+    // という目印 (ドリフトが途切れた場所)。
+    struct TrailPt {
+        Vec3 pos;    // ランプのワールド位置
+        float age;   // 再生時刻から見た古さ (秒)。負なら区切り
+    };
+    // 再生時刻 t の時点で残っているはずのバックランプ残像 (過去 1.15 秒の
+    // ドリフト区間) を、左右ランプ別に点列で返す。点があれば true。
+    bool trailPointsAt(float t, std::vector<TrailPt>& left, std::vector<TrailPt>& right) const;
+
 private:
     // 記録 1 点分。物理と同じ 60Hz で刻むので時刻は添字から復元できる。
     struct Sample {
-        float x, y, z;  // 位置
-        float yaw;      // 向き
+        float x, y, z;   // 位置
+        float yaw;       // 向き
+        bool trail = false;  // この瞬間ドリフト中で光跡が出ていたか
     };
     static constexpr float kStepSec = 1.0f / 60.0f;  // 記録間隔 (物理ステップ)
 

@@ -9,6 +9,7 @@
 // ============================================================================
 
 #include "geom.hpp"
+#include "render.hpp"  // CpuMesh (タイヤ痕のキャッシュ用)
 
 #include <vector>
 
@@ -57,6 +58,9 @@ public:
     // 描画 (ワールド描画中、renderer の beginWorld の後に呼ぶ)。
     void drawSmoke(IRenderer& renderer, const Orbit& camera) const;
     void drawTrails(IRenderer& renderer) const;
+    // ゴースト用の残像描画 (点列は Ghost::trailPointsAt の結果を変換したもの)。
+    void drawGhostTrails(IRenderer& renderer, const std::vector<TrailPoint>& left,
+                         const std::vector<TrailPoint>& right) const;
     void drawMarks(IRenderer& renderer) const;  // タイヤ痕 (車より先に描く)
     void drawSparks(IRenderer& renderer, const Orbit& camera) const;  // 火花
     // テスト・診断用: 現在残っているタイヤ痕の区間数。
@@ -79,6 +83,11 @@ private:
     std::vector<TrailPoint> trailR_;  // 右ランプの履歴
     // --- タイヤ痕 ---
     std::vector<SkidMark> marks_;   // 残っている痕の区間列
+    // 痕の描画メッシュのキャッシュ。毎フレーム全区間を作り直すと重いので、
+    // 変化があった時と色フェードの更新 (約 0.15 秒ごと) だけ作り直す。
+    mutable CpuMesh marksMesh_;       // 作り置きの描画メッシュ
+    mutable bool marksDirty_ = true;  // 作り直しが必要か
+    mutable int marksFrames_ = 0;     // 前回作り直してからのフレーム数
     Vec3 lastMarkL_{0, 0, 0};       // 左後輪の前回記録位置 (区間をつなぐ)
     Vec3 lastMarkR_{0, 0, 0};       // 右後輪の前回記録位置
     bool markChain_ = false;        // 前フレームも痕を出していたか (連続判定)

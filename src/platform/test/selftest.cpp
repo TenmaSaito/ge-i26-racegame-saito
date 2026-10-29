@@ -211,6 +211,23 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
     if (travelled < 1200.0f) return 3;
     if (maxLat > 30.0f) return 4;
     if (!std::isfinite(car.y)) return 6;
+    // --- ゴーストの残像: ドリフト中の記録から光跡の点列が復元できる ----
+    {
+        Ghost ghost;
+        Car gc;
+        gc.drifting = true;
+        gc.driftAmount = 0.8f;  // 光跡の出る条件
+        ghost.beginLap();
+        for (int i = 0; i < 120; ++i) {  // 2 秒分、まっすぐ進みながら記録
+            gc.x = float(i) * 0.5f;
+            ghost.recordPose(gc);
+        }
+        ghost.finishLap(10.0f);
+        std::vector<Ghost::TrailPt> gl, gr;
+        if (!ghost.trailPointsAt(1.5f, gl, gr) || gl.size() < 10 || gr.size() < 10) {
+            return 22;  // 残像の点列が取れない
+        }
+    }
     // 地形: コース脇は路面中心と同じ高さ、遠方は山として盛り上がること。
     {
         SceneryBuilder builder(track);

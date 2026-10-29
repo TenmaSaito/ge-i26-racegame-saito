@@ -4,6 +4,9 @@
 
 #include "ghost.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include "car.hpp"  // Car (ポーズの読み取り)
 
 #include <cmath>
@@ -17,7 +20,11 @@ void Ghost::recordPose(const Car& car) {
     if (!active_) {
         return;
     }
-    recording_.push_back({car.x, car.y, car.z, car.yaw});
+    Sample s;
+    s.x = car.x; s.y = car.y; s.z = car.z; s.yaw = car.yaw;
+    // プレイヤー側の光跡と同じ条件 (ドリフト中・量 0.3 超) で記録する。
+    s.trail = car.drifting && car.driftAmount > 0.3f;
+    recording_.push_back(s);
 }
 
 void Ghost::finishLap(float lapTime) {
@@ -28,6 +35,43 @@ void Ghost::finishLap(float lapTime) {
         bestTime_ = lapTime;
     }
     recording_.clear();
+}
+
+bool Ghost::trailPointsAt(float t, std::vector<TrailPt>& left, std::vector<TrailPt>& right) const {
+    left.clear();
+    right.clear();
+    if (best_.empty() || t < 0) {
+        return false;
+    }
+    // 残像の寿命はプレイヤー側と同じ 1.15 秒。その窓の中にある
+    // 「光跡が出ていた」サンプルから、ランプ位置を復元する。
+    const float kWindow = 1.15f;
+    size_t i1 = size_t(std::max(0.0f, t - kWindow) / kStepSec);
+    size_t i2 = std::min(size_t(t / kStepSec), best_.size() - 1);
+    bool prevTrail = false;  // 直前のサンプルも光跡が出ていたか (帯の連続判定)
+    for (size_t i = i1; i <= i2; ++i) {
+        const Sample& s = best_[i];
+        if (!s.trail) {
+            prevTrail = false;
+            continue;
+        }
+        // ランプ位置は Effects::lampWorldPos と同じ式 (後端 -2.1m、±0.55m、高さ 0.47m)。
+        Vec3 fwd{std::sin(s.yaw), 0, std::cos(s.yaw)};
+        Vec3 rightv{fwd.z, 0, -fwd.x};
+        Vec3 base{s.x, s.y + 0.47f, s.z};
+        float age = t - float(i) * kStepSec;
+        std::vector<TrailPt>* outs[2] = {&left, &right};
+        const float sides[2] = {-1.0f, 1.0f};
+        for (int k = 0; k < 2; ++k) {
+            Vec3 p = base + rightv * (sides[k] * 0.55f) + fwd * -2.1f;
+            if (!prevTrail && !outs[k]->empty()) {
+                outs[k]->push_back({p, -1.0f});  // 帯の区切り
+            }
+            outs[k]->push_back({p, age});
+        }
+        prevTrail = true;
+    }
+    return !left.empty() || !right.empty();
 }
 
 void Ghost::discard() {

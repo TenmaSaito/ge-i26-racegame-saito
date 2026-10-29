@@ -16,9 +16,9 @@
 
 namespace {
 // タイヤ痕の寿命 (秒)。過ぎた痕から路面色へ溶けて消える。
-constexpr float kMarkLife = 30.0f;
+constexpr float kMarkLife = 26.0f;
 // タイヤ痕の最大区間数。超えたら古いものから捨てる (メモリと描画の上限)。
-constexpr size_t kMarkMax = 2600;
+constexpr size_t kMarkMax = 2000;
 }  // namespace
 
 void Effects::clear() {
@@ -27,6 +27,7 @@ void Effects::clear() {
     trailL_.clear();
     trailR_.clear();
     marks_.clear();
+    marksDirty_ = true;
     markChain_ = false;
     smokeAcc_ = 0;
 }
@@ -66,7 +67,7 @@ void Effects::update(const Car& car, float dt) {
                          -car.velZ * 0.12f + (rnd() - 0.5f) * 0.8f};
             p.life = 0.8f + rnd() * 0.5f;
             smoke_.push_back(p);
-            if (smoke_.size() > 260) {
+            if (smoke_.size() > 210) {
                 smoke_.erase(smoke_.begin());
             }
         }
@@ -94,9 +95,13 @@ void Effects::update(const Car& car, float dt) {
 
     // --- タイヤ痕: ドリフトで後輪が滑った帯を路面に残す -------------------
     for (auto& m : marks_) m.age += dt;
-    marks_.erase(std::remove_if(marks_.begin(), marks_.end(),
-                                [](const SkidMark& m) { return m.age > kMarkLife; }),
-                 marks_.end());
+    {
+        size_t before = marks_.size();
+        marks_.erase(std::remove_if(marks_.begin(), marks_.end(),
+                                    [](const SkidMark& m) { return m.age > kMarkLife; }),
+                     marks_.end());
+        if (marks_.size() != before) marksDirty_ = true;  // 消えたら作り直し
+    }
     // 出す条件: ドリフト中・接地している・舗装の上・それなりの速度。
     const bool laying = car.drifting && car.driftAmount > 0.3f &&
                         car.onAsphalt && std::fabs(car.speed) > 5.0f;
@@ -114,6 +119,7 @@ void Effects::update(const Car& car, float dt) {
                 if (d2 > 0.36f) {  // 0.6m 以上進んだら 1 区間として刻む
                     if (d2 < 25.0f) {  // 5m 以上の跳びはリセット等なのでつながない
                         marks_.push_back({*lasts[i], pos, 0.0f, clampf(car.driftAmount, 0.0f, 1.0f)});
+                        marksDirty_ = true;  // 増えたら作り直し
                     }
                     *lasts[i] = pos;
                 }
@@ -123,6 +129,7 @@ void Effects::update(const Car& car, float dt) {
         }
         if (marks_.size() > kMarkMax) {
             marks_.erase(marks_.begin(), marks_.begin() + (marks_.size() - kMarkMax));
+            marksDirty_ = true;
         }
     }
     markChain_ = laying;
@@ -200,87 +207,109 @@ void Effects::drawSmoke(IRenderer& renderer, const Orbit& camera) const {
     CpuMesh mesh;
     for (const SmokePuff& p : smoke_) {
         float t = p.age / p.life;
-        float radius = 0.35f + 1.35f * t;
+        float radius = 0.30f + 1.00f * t;
         Vec3 color = Vec3{0.52f, 0.52f, 0.55f} * (1.0f - t) + Vec3{0.88f, 0.90f, 0.92f} * t;
         std::uint32_t base = static_cast<std::uint32_t>(mesh.vertices.size() / 9);
         mesh.addVertex(p.pos, n, color);
-        for (int k = 0; k < 8; ++k) {
-            float a = float(k) * 0.7853981f;
+        for (int k = 0; k < 6; ++k) {  // 六角形 (八角形から頂点を減らして軽く)
+            float a = float(k) * 1.0471976f;
             mesh.addVertex(p.pos + right * (std::cos(a) * radius) + up * (std::sin(a) * radius),
                            n, color);
         }
-        for (int k = 0; k < 8; ++k) {
+        for (int k = 0; k < 6; ++k) {
             mesh.addRawTriangle(base, base + 1 + static_cast<std::uint32_t>(k),
-                                base + 1 + static_cast<std::uint32_t>((k + 1) % 8));
+                                base + 1 + static_cast<std::uint32_t>((k + 1) % 6));
         }
     }
     renderer.drawDynamic(mesh);
 }
 
-// 光跡を帯として描く。点列を幅 0.17m のリボンにし、古い方ほど暗くする。
+// 光跡を帯として描く共通処理。点列を幅 0.17m のリボンにし、古い点ほど
+// 暗くする。age が負の点は区切り (その前後の区間は描かない)。
+// baseCol は生まれたての色 (プレイヤーは HDR 赤、ゴーストは少し落とす)。
+static void appendTrailRibbon(CpuMesh& mesh, const std::vector<TrailPoint>& pts, Vec3 baseCol) {
+    for (size_t i = 1; i < pts.size(); ++i) {
+        const TrailPoint& a = pts[i - 1];
+        const TrailPoint& b = pts[i];
+        if (a.age < 0.0f || b.age < 0.0f) continue;  // 区切りをまたがない
+        Vec3 seg = b.pos - a.pos;
+        if (length(seg) < 0.001f) continue;
+        // 幅方向は「進行方向 × 上」で取る。カメラ方向と交差させると
+        // 後方カメラで進行と視線が平行になり、帯が暴れてしまう。
+        Vec3 w = normalize(cross(seg, Vec3{0, 1, 0}));
+        const float hw = 0.085f;
+        auto col = [baseCol](float age) {
+            float f = clampf(1.0f - age / 1.15f, 0.0f, 1.0f);
+            return baseCol * f;
+        };
+        Vec3 a0 = a.pos + w * -hw, a1 = a.pos + w * hw;
+        Vec3 b0 = b.pos + w * -hw, b1 = b.pos + w * hw;
+        // 2 三角形を色フェード付きで直接積む（addQuad は単色なので手書き）
+        auto tri = [&mesh](Vec3 p, Vec3 q, Vec3 r, Vec3 c1, Vec3 c2, Vec3 c3) {
+            std::uint32_t base = std::uint32_t(mesh.vertices.size() / 9);
+            mesh.addVertex(p, {0, 1, 0}, c1);
+            mesh.addVertex(q, {0, 1, 0}, c2);
+            mesh.addVertex(r, {0, 1, 0}, c3);
+            mesh.addRawTriangle(base, base + 1, base + 2);
+        };
+        tri(a0, b0, b1, col(a.age), col(b.age), col(b.age));
+        tri(a0, b1, a1, col(a.age), col(b.age), col(a.age));
+    }
+}
+
+// プレイヤーの光跡。
 void Effects::drawTrails(IRenderer& renderer) const {
     CpuMesh mesh;
-    const std::vector<TrailPoint>* trails[2] = {&trailL_, &trailR_};
-    for (auto* trail : trails) {
-        for (size_t i = 1; i < trail->size(); ++i) {
-            const TrailPoint& a = (*trail)[i - 1];
-            const TrailPoint& b = (*trail)[i];
-            Vec3 seg = b.pos - a.pos;
-            if (length(seg) < 0.001f) continue;
-            // 幅方向は「進行方向 × 上」で取る。カメラ方向と交差させると
-            // 後方カメラで進行と視線が平行になり、帯が暴れてしまう。
-            Vec3 w = normalize(cross(seg, Vec3{0, 1, 0}));
-            const float hw = 0.085f;
-            auto col = [](float age) {
-                float f = clampf(1.0f - age / 1.15f, 0.0f, 1.0f);
-                return Vec3{1.9f * f, 0.16f * f, 0.16f * f};
-            };
-            Vec3 a0 = a.pos + w * -hw, a1 = a.pos + w * hw;
-            Vec3 b0 = b.pos + w * -hw, b1 = b.pos + w * hw;
-            // 2 三角形を色フェード付きで直接積む（addQuad は単色なので手書き）
-            auto tri = [&mesh](Vec3 p, Vec3 q, Vec3 r, Vec3 c1, Vec3 c2, Vec3 c3) {
-                std::uint32_t base = std::uint32_t(mesh.vertices.size() / 9);
-                mesh.addVertex(p, {0, 1, 0}, c1);
-                mesh.addVertex(q, {0, 1, 0}, c2);
-                mesh.addVertex(r, {0, 1, 0}, c3);
-                mesh.addRawTriangle(base, base + 1, base + 2);
-            };
-            tri(a0, b0, b1, col(a.age), col(b.age), col(b.age));
-            tri(a0, b1, a1, col(a.age), col(b.age), col(a.age));
-        }
-    }
+    appendTrailRibbon(mesh, trailL_, Vec3{1.9f, 0.16f, 0.16f});
+    appendTrailRibbon(mesh, trailR_, Vec3{1.9f, 0.16f, 0.16f});
+    if (!mesh.vertices.empty()) renderer.drawDynamic(mesh);
+}
+
+// ゴーストの残像。本体が半透明なので、帯の色も少し落として判別しやすくする。
+void Effects::drawGhostTrails(IRenderer& renderer, const std::vector<TrailPoint>& left,
+                              const std::vector<TrailPoint>& right) const {
+    CpuMesh mesh;
+    appendTrailRibbon(mesh, left, Vec3{1.15f, 0.30f, 0.30f});
+    appendTrailRibbon(mesh, right, Vec3{1.15f, 0.30f, 0.30f});
     if (!mesh.vertices.empty()) renderer.drawDynamic(mesh);
 }
 
 // タイヤ痕を路面の帯として描く。新しい痕はほぼ黒、古くなるほど
 // 路面色 (アスファルトのグレー) へ寄せて「溶けて消える」ように見せる。
+// メッシュはキャッシュし、痕が増減した時と約 0.15 秒ごとのフェード
+// 更新のときだけ作り直す (毎フレーム全区間の再構築が重かったため)。
 void Effects::drawMarks(IRenderer& renderer) const {
     if (marks_.empty()) {
         return;
     }
-    const Vec3 ink{0.05f, 0.05f, 0.055f};    // 焼けたゴムの色
-    const Vec3 road{0.23f, 0.23f, 0.24f};    // 路面色 (フェードの行き先)
-    CpuMesh mesh;
-    for (const SkidMark& m : marks_) {
-        Vec3 seg = m.to - m.from;
-        seg.y = 0;
-        if (length(seg) < 0.001f) continue;
-        // 帯の幅方向 (進行と直交する水平方向)。タイヤ幅 ≒ 0.3m。
-        Vec3 w = normalize(cross(seg, Vec3{0, 1, 0})) * 0.15f;
-        float fade = clampf(1.0f - m.age / kMarkLife, 0.0f, 1.0f);
-        float k = (0.25f + 0.75f * fade) * m.strength;  // 残り具合
-        Vec3 col = road * (1.0f - k) + ink * k;
-        Vec3 a0 = m.from - w, a1 = m.from + w;
-        Vec3 b0 = m.to - w, b1 = m.to + w;
-        std::uint32_t base = std::uint32_t(mesh.vertices.size() / 9);
-        mesh.addVertex(a0, {0, 1, 0}, col);
-        mesh.addVertex(b0, {0, 1, 0}, col);
-        mesh.addVertex(b1, {0, 1, 0}, col);
-        mesh.addVertex(a1, {0, 1, 0}, col);
-        mesh.addRawTriangle(base, base + 1, base + 2);
-        mesh.addRawTriangle(base, base + 2, base + 3);
+    if (marksDirty_ || ++marksFrames_ >= 9) {
+        marksDirty_ = false;
+        marksFrames_ = 0;
+        const Vec3 ink{0.05f, 0.05f, 0.055f};    // 焼けたゴムの色
+        const Vec3 road{0.23f, 0.23f, 0.24f};    // 路面色 (フェードの行き先)
+        CpuMesh mesh;
+        for (const SkidMark& m : marks_) {
+            Vec3 seg = m.to - m.from;
+            seg.y = 0;
+            if (length(seg) < 0.001f) continue;
+            // 帯の幅方向 (進行と直交する水平方向)。タイヤ幅 ≒ 0.3m。
+            Vec3 w = normalize(cross(seg, Vec3{0, 1, 0})) * 0.15f;
+            float fade = clampf(1.0f - m.age / kMarkLife, 0.0f, 1.0f);
+            float k = (0.25f + 0.75f * fade) * m.strength;  // 残り具合
+            Vec3 col = road * (1.0f - k) + ink * k;
+            Vec3 a0 = m.from - w, a1 = m.from + w;
+            Vec3 b0 = m.to - w, b1 = m.to + w;
+            std::uint32_t base = static_cast<std::uint32_t>(mesh.vertices.size() / 9);
+            mesh.addVertex(a0, {0, 1, 0}, col);
+            mesh.addVertex(b0, {0, 1, 0}, col);
+            mesh.addVertex(b1, {0, 1, 0}, col);
+            mesh.addVertex(a1, {0, 1, 0}, col);
+            mesh.addRawTriangle(base, base + 1, base + 2);
+            mesh.addRawTriangle(base, base + 2, base + 3);
+        }
+        marksMesh_ = std::move(mesh);
     }
-    if (!mesh.vertices.empty()) renderer.drawDynamic(mesh);
+    if (!marksMesh_.indices.empty()) renderer.drawDynamic(marksMesh_);
 }
 
 // 火花を描く。カメラ向きの小さな四角を、熱い橙 (HDR) から暗い赤へ

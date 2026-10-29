@@ -90,7 +90,7 @@ public:
 
     // 配置した景観は 1 件ずつ SceneryInstance として objects へ登録し
     // (一括管理の実体)、その実体からチャンクメッシュを焼き込む。
-    std::vector<SceneryChunk> build(ObjectManager& objects, int samplesPerChunk = 120) const;
+    std::vector<SceneryChunk> build(ObjectManager& objects, int samplesPerChunk = 60) const;
     // 背景の山並み（コースをぐるりと囲む稜線リング）。スカイボックス代わり。
     CpuMesh buildBackdrop() const;
     // 地形の高さ (x, z 地点)。コース近傍は路面中心の高さに張り付き、

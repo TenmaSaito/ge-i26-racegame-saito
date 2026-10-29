@@ -538,10 +538,10 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
     // 覆ってしまう (実際に車が埋まった)。帯は必ず内側に触れない。
     const float ox0 = minX - 1500.0f, oz0 = minZ - 1500.0f;
     const float ox1 = maxX + 1500.0f, oz1 = maxZ + 1500.0f;
-    buildGrid(ox0, oz0, ox1, iz0, 80.0f, -0.3f);   // 北
-    buildGrid(ox0, iz1, ox1, oz1, 80.0f, -0.3f);   // 南
-    buildGrid(ox0, iz0, ix0, iz1, 80.0f, -0.3f);   // 西
-    buildGrid(ix1, iz0, ox1, iz1, 80.0f, -0.3f);   // 東
+    buildGrid(ox0, oz0, ox1, iz0, 120.0f, -0.3f);   // 北
+    buildGrid(ox0, iz1, ox1, oz1, 120.0f, -0.3f);   // 南
+    buildGrid(ox0, iz0, ix0, iz1, 120.0f, -0.3f);   // 西
+    buildGrid(ix1, iz0, ox1, iz1, 120.0f, -0.3f);   // 東
     return mesh;
 }
 

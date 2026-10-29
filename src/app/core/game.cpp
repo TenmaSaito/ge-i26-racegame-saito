@@ -214,11 +214,11 @@ void Game::beginWorldDraw() {
 void Game::drawWorld(Vec3 carPos, float carYaw) {
     Mat4 identity;
     renderer_->draw(backdrop_, identity);
-    // 景観はチャンク単位で距離カリング (1000m 以内だけ描く)。
+    // 景観はチャンク単位で距離カリング (900m 以内だけ描く)。
     for (size_t i = 0; i < scenery_.size(); ++i) {
         float dx = sceneryCenters_[i].x - camera_.eye.x;
         float dz = sceneryCenters_[i].z - camera_.eye.z;
-        if (dx * dx + dz * dz < 1000.0f * 1000.0f) renderer_->draw(scenery_[i], identity);
+        if (dx * dx + dz * dz < 900.0f * 900.0f) renderer_->draw(scenery_[i], identity);
     }
     // タイヤ痕は路面に残るものなので、車より先 (景観の直後) に描く。
     effects_.drawMarks(*renderer_);
@@ -290,6 +290,17 @@ void Game::drawGhost() {
             Mat4 place = mul(translation(float(side) * wheelX, 0.34f, wheelZ[i]), Mat4());
             renderer_->drawAlpha(wheel_, mul(model, place), 0.42f);
         }
+    }
+    // バックランプの残像もゴーストに付ける (記録時にドリフトしていた区間だけ)。
+    std::vector<Ghost::TrailPt> gl, gr;
+    if (ghost_.trailPointsAt(race_.lap(), gl, gr)) {
+        auto conv = [](const std::vector<Ghost::TrailPt>& src) {
+            std::vector<TrailPoint> out;
+            out.reserve(src.size());
+            for (const auto& p : src) out.push_back({p.pos, p.age});
+            return out;
+        };
+        effects_.drawGhostTrails(*renderer_, conv(gl), conv(gr));
     }
 }
 
