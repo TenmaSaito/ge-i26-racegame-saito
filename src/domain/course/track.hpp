@@ -52,6 +52,10 @@ struct Track {
     bool loadFromText(const std::string& text);
     // preferS が 0 以上のときは、その周回位置に近い路面を優先する。立体交差で上下を取り違えない。
     TrackPose query(float x, float z, float yHint, float preferS = -1.0f) const;
+    // 平面距離だけで最寄り区間を引く版。地形の高さ決め専用: 高さで選ぶと
+    // 立体交差の上下を取り違え、地形が路面を覆ったり谷になったりする。
+    // 車の物理は従来の query (高さ優先) を使うこと。
+    TrackPose queryPlanar(float x, float z) const;
     float wallLateral() const { return halfWidth + curbWidth + runoff; }
     const char* nameOf(int nameId) const;
 };

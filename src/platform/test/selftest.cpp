@@ -223,6 +223,13 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         std::printf("self-test terrain near %.1f far %.1f (center %.1f)\n", near, far, g0.centerY);
         if (std::fabs(near - g0.centerY) > 0.01f) return 16;
         if (far < g0.centerY + 4.0f) return 17;  // 丘+遠景で必ず少しは盛り上がる
+        // 回帰検証: 全サンプル地点で地形が路面中心高と一致すること。
+        // 立体交差で上下の区間を取り違えると、ここが大きくずれて
+        // 「地形が路面を覆う」事故になる (実際に起きた)。
+        for (const TrackSample& smp : track.samples) {
+            float h = builder.terrainHeightAt(smp.x, smp.z);
+            if (std::fabs(h - smp.y) > 0.6f) return 18;
+        }
     }
     // 火花: 壁に擦らせた車を与えると火花が出ること。
     {

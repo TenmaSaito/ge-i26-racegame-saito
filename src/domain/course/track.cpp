@@ -450,6 +450,51 @@ TrackPose Track::query(float x, float z, float yHint, float preferS) const {
     return best;
 }
 
+TrackPose Track::queryPlanar(float x, float z) const {
+    TrackPose best;
+    float bestScore = 1.0e30f;
+    const int n = static_cast<int>(samples.size());
+    for (int i = 0; i < n; ++i) {
+        const TrackSample& a = samples[i];
+        const TrackSample& b = samples[(i + 1) % n];
+        float abx = b.x - a.x;
+        float abz = b.z - a.z;
+        float len2 = abx * abx + abz * abz;
+        if (len2 < 1e-4f) {
+            continue;
+        }
+        float t = ((x - a.x) * abx + (z - a.z) * abz) / len2;
+        t = clampf(t, 0.0f, 1.0f);
+        float cx = a.x + abx * t;
+        float cz = a.z + abz * t;
+        float dx = x - cx;
+        float dz = z - cz;
+        float score = dx * dx + dz * dz;  // 平面距離のみ (高さは見ない)
+        if (score >= bestScore) {
+            continue;
+        }
+        bestScore = score;
+        float invLen = 1.0f / std::sqrt(len2);
+        float tx = abx * invLen;
+        float tz = abz * invLen;
+        best.found = true;
+        best.s = a.s + std::sqrt(len2) * t;
+        if (best.s >= length) {
+            best.s -= length;
+        }
+        best.rightX = tz;
+        best.rightZ = -tx;
+        best.lateral = dx * best.rightX + dz * best.rightZ;
+        best.centerY = a.y + (b.y - a.y) * t;
+        best.cross = a.cross + (b.cross - a.cross) * t;
+        best.yaw = std::atan2(tx, tz);
+        best.xzDist = std::sqrt(dx * dx + dz * dz);
+        best.corner = t < 0.5f ? a.corner : b.corner;
+        best.nameId = t < 0.5f ? a.nameId : b.nameId;
+    }
+    return best;
+}
+
 const char* Track::nameOf(int nameId) const {
     if (nameId < 0 || nameId >= static_cast<int>(names.size())) {
         return "";

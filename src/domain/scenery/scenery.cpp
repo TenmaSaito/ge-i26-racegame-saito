@@ -307,8 +307,9 @@ void SceneryBuilder::ensureBumps() const {
 float SceneryBuilder::terrainHeightAt(float x, float z) const {
     // 高さのヒント無しで引くと、立体交差するコースでは別の区間を掴む。
     // 一度引いて得た中心高をヒントに引き直し、上下に近い区間へ寄せる。
-    TrackPose q = track_.query(x, z, 0.0f, -1.0f);
-    q = track_.query(x, z, q.centerY, -1.0f);
+    // 区間選びは平面距離のみ (queryPlanar)。高さで選ぶ query だと
+    // 立体交差で上下を取り違え、地形が路面を覆う事故が起きた。
+    TrackPose q = track_.queryPlanar(x, z);
     if (!q.found) {
         return 0.0f;
     }
@@ -369,7 +370,7 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
                 p.y = terrainHeightAt(p.x, p.z) + sink;
                 // 路面のすぐ脇では少しだけ窪ませ、芝や路盤の下に隠す
                 // (バンクで縁が下がる側でも地形が顔を出さないため)。
-                TrackPose q = track_.query(p.x, p.z, p.y, -1.0f);
+                TrackPose q = track_.queryPlanar(p.x, p.z);
                 if (q.found && std::fabs(q.lateral) < 45.0f) {
                     p.y -= 0.30f * (1.0f - std::fabs(q.lateral) / 45.0f);
                 }
@@ -390,7 +391,7 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
                 }
                 normal = normalize(normal);
                 // 色: 平地は草、森の斑、斜面と高所は岩、頂上は雪。
-                TrackPose q = track_.query(p.x, p.z, p.y, -1.0f);
+                TrackPose q = track_.queryPlanar(p.x, p.z);
                 float relief = p.y - q.centerY;
                 float slope = 1.0f - normal.y;
                 Vec3 col{0.16f, 0.34f, 0.13f};
