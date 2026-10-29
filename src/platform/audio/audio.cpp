@@ -164,10 +164,15 @@ public:
                     uint32_t(enginePcm_[i].size() * sizeof(int16_t)));
             }
         }
-        // ドリフト: そのまま読み込む (Mixer が形式変換する)。
+        // ドリフト: 先頭 2.2 秒 (音量の安定した部分) を読み、継ぎ目を
+        // クロスフェードして「終わらないループ」に加工する。ドリフトが
+        // 長く続いても途中で切れない。
+        std::vector<int16_t> driftBase;
         std::string driftPath = findAsset("drift.wav");
-        if (!driftPath.empty()) {
-            drift_ = Mix_LoadWAV(driftPath.c_str());
+        if (!driftPath.empty() && loadWavStereo(driftPath, driftBase) && driftBase.size() > 8) {
+            driftPcm_ = makePitchVariant(driftBase, 1.0f);  // 加工 (継ぎ目処理)
+            drift_ = Mix_QuickLoad_RAW(reinterpret_cast<uint8_t*>(driftPcm_.data()),
+                                       uint32_t(driftPcm_.size() * sizeof(int16_t)));
         }
     }
     ~MixerAudio() override {
@@ -209,8 +214,8 @@ public:
         }
     }
 
-    // ドリフト音 (ロケットスタート音源)。開始で鳴らし、強さで音量、
-    // 終わったら短くフェードアウト。鳴り終わっても強ければ鳴らし直す。
+    // ドリフト音 (ロケットスタート音源のループ加工版)。ドリフト中は
+    // 無限ループで鳴り続け、強さで音量が変わる。終わったらフェードアウト。
     void setSlip(float amount) override {
         if (!drift_) {
             return;
@@ -218,7 +223,7 @@ public:
         bool playing = driftCh_ >= 0 && Mix_Playing(driftCh_);
         if (amount >= 0.05f) {
             if (!playing) {
-                driftCh_ = Mix_PlayChannel(-1, drift_, 0);
+                driftCh_ = Mix_PlayChannel(-1, drift_, -1);  // 無限ループ
             }
             if (driftCh_ >= 0) {
                 int vol = int(30.0f + amount * 95.0f);
@@ -234,6 +239,7 @@ private:
     static constexpr int kEngineSteps = 6;             // ピッチの段数
     std::vector<int16_t> enginePcm_[kEngineSteps];     // 段ごとの波形 (保持が必須)
     Mix_Chunk* engineChunks_[kEngineSteps] = {};       // 段ごとの再生チャンク
+    std::vector<int16_t> driftPcm_;                    // ドリフト音のループ波形 (保持が必須)
     Mix_Chunk* drift_ = nullptr;                       // ドリフト音
     int engineCh_ = -1;                                // エンジン再生チャンネル
     int driftCh_ = -1;                                 // ドリフト再生チャンネル

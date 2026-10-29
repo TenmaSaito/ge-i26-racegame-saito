@@ -100,6 +100,16 @@ public:
 private:
     const Track& track_;
 
+    // 丘 1 つの配置。木のある辺りに滑らかな盛り上がりを作るための素。
+    struct Bump {
+        float x, z;      // 中心 (ワールド座標)
+        float radius;    // 広がり (m)
+        float height;    // 高さ (m)
+    };
+    mutable std::vector<Bump> bumps_;   // 丘の配置 (初回に決めて使い回す)
+    mutable bool bumpsReady_ = false;   // 丘の配置が済んだか
+    void ensureBumps() const;           // 丘の配置を決める (決定的)
+
     Vec3 rightAt(int index) const;
     Vec3 pointAt(int index, float lateral) const;
     float edgeY(int index, float side) const;  // 芝リボンの高さ（縁石基準）

@@ -273,6 +273,37 @@ void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, fl
 // 自分に近づく場所 (鈴鹿のクロスオーバー等) でも山が路面を突き破らない。
 // ============================================================================
 
+// 丘の配置を決める。コースに沿って間引きした地点の左右に、木が生える
+// ような辺り (横 150〜530m) へ、大きさと高さをばらつかせて置く。
+// ハッシュで決定的に決まるので、呼ぶたびに同じ地形になる。
+void SceneryBuilder::ensureBumps() const {
+    if (bumpsReady_) {
+        return;
+    }
+    bumpsReady_ = true;
+    const int n = int(track_.samples.size());
+    for (int i = 24; i < n; i += 23) {
+        for (int s = -1; s <= 1; s += 2) {
+            const unsigned h = treeHash(i * 13 + 7, float(s));
+            if ((h % 100u) >= 78u) {
+                continue;  // 2 割強は空けて、丘の無い開けた場所も残す
+            }
+            const float lat = 150.0f + float((h >> 3) % 100u) / 100.0f * 380.0f;
+            Vec3 p = pointAt(i, float(s) * lat);
+            Bump b;
+            b.x = p.x;
+            b.z = p.z;
+            b.radius = 100.0f + float((h >> 9) % 100u) / 100.0f * 120.0f;
+            b.height = 12.0f + float((h >> 15) % 100u) / 100.0f * 24.0f;
+            bumps_.push_back(b);
+        }
+    }
+}
+
+// 地形の高さ。土台は最寄りコース地点の中心高 (平らな帯はコース脇だけ)、
+// その上に「丘の集合」の盛り上がりと、遠景を閉じる緩い隆起を重ねる。
+// 丘の影響は最寄りの路面からの距離で絞る (回廊フェード) ので、コースが
+// 近くを通る場所では丘が路面を埋めない。
 float SceneryBuilder::terrainHeightAt(float x, float z) const {
     // 高さのヒント無しで引くと、立体交差するコースでは別の区間を掴む。
     // 一度引いて得た中心高をヒントに引き直し、上下に近い区間へ寄せる。
@@ -282,50 +313,85 @@ float SceneryBuilder::terrainHeightAt(float x, float z) const {
         return 0.0f;
     }
     const float lat = std::fabs(q.lateral);
-    const float flatEnd = 150.0f;    // 平らな帯の外端 (住宅街まで収まる)
-    const float farEnd = 1600.0f;    // 盛り上がりが頭打ちになる距離
-    if (lat <= flatEnd) {
-        return q.centerY;
+    // 回廊フェード: 路面から 30m までは地形を盛らない (コースを埋めない)、
+    // 110m で完全に盛る。
+    float fade = (lat - 30.0f) / 80.0f;
+    fade = fade < 0.0f ? 0.0f : (fade > 1.0f ? 1.0f : fade);
+    fade = fade * fade * (3.0f - 2.0f * fade);  // smoothstep
+    float y = q.centerY;
+    if (fade > 0.0f) {
+        ensureBumps();
+        float bumps = 0.0f;
+        for (const Bump& b : bumps_) {
+            const float dx = x - b.x;
+            const float dz = z - b.z;
+            const float rr = b.radius * 2.4f;
+            if (dx > rr || dx < -rr || dz > rr || dz < -rr) {
+                continue;  // 届かない丘は計算しない
+            }
+            const float d2 = dx * dx + dz * dz;
+            bumps += b.height * std::exp(-2.0f * d2 / (b.radius * b.radius));
+        }
+        // 丘が重なる場所で際限なく高くならないよう、柔らかく頭打ちにする
+        // (重なりすぎると不自然な大斜面になって陰影も真っ黒に潰れる)。
+        bumps = 40.0f * std::tanh(bumps / 40.0f);
+        y += bumps * fade;
+        // 遠景: 視界の奥を閉じる緩い隆起 (周回周期のうねり付き)。
+        if (lat > 500.0f) {
+            const float t = q.s / track_.length;
+            const float u = std::min((lat - 500.0f) / 1100.0f, 1.0f);
+            const float n = std::sin(6.2831853f * 3.0f * t + 2.0f * std::sin(lat * 0.004f));
+            y += std::pow(u, 1.6f) * 75.0f * (0.82f + 0.33f * n);
+        }
     }
-    const float t = q.s / track_.length;  // コース周回位置 0..1 (周期ノイズ用)
-    const float u = (lat - flatEnd) / (farEnd - flatEnd);  // 0→1
-    // 周期的なうねり (周回で継ぎ目が出ないよう t の整数周期サインで作る)。
-    const float n = 0.55f * std::sin(6.2831853f * 3.0f * t + 2.0f * std::sin(lat * 0.004f)) +
-                    0.30f * std::sin(6.2831853f * 8.0f * t - lat * 0.006f) +
-                    0.15f * std::sin(6.2831853f * 17.0f * t + lat * 0.011f);
-    const float rise = std::pow(u, 1.35f) * 150.0f * (0.82f + 0.33f * n);
-    // 中距離のなだらかな起伏も足して単調さを消す。
-    const float mid = std::pow(std::min((lat - flatEnd) / 400.0f, 1.0f), 2.0f) *
-                      30.0f * (0.7f + 0.3f * std::sin(6.2831853f * 5.0f * t + lat * 0.008f));
-    return q.centerY + rise + mid;
+    return y;
 }
 
 CpuMesh SceneryBuilder::buildBackdrop() const {
     CpuMesh mesh;
     const int n = int(track_.samples.size());
-    // 横方向の列 (中心線からの距離)。平らな帯 → 緩い丘 → 遠くの山。
+    // 横方向の列 (中心線からの距離)。平らな帯 → 丘の帯 → 遠景。
     const float start = track_.halfWidth + 0.5f;
     const float lats[] = {start, 40.0f, 90.0f, 150.0f, 230.0f, 340.0f,
                           520.0f, 780.0f, 1150.0f, 1600.0f};
     const int cols = int(sizeof(lats) / sizeof(lats[0]));
     const int step = 2;  // サンプルを 1 つ飛ばしで使う (頂点数を抑える)
     const int rows = (n + step - 1) / step;
-    // 頂点を [行][左右][列] の順に並べ、滑らかな法線を付けて登録する。
-    std::vector<std::uint32_t> grid;
-    grid.reserve(size_t(rows) * 2 * size_t(cols));
+    // まず位置と高さだけを格子状に用意する (法線は格子の差分から作るので、
+    // 高さ関数の呼び出しは頂点あたり 1 回で済む)。
+    std::vector<Vec3> pos(size_t(rows) * 2 * size_t(cols));
+    auto cell = [&](int r, int side, int cix) -> Vec3& {
+        return pos[(size_t(r) * 2 + size_t(side)) * size_t(cols) + size_t(cix)];
+    };
     for (int r = 0; r < rows; ++r) {
         const int i = std::min(r * step, n - 1);
-        for (int s = -1; s <= 1; s += 2) {
+        for (int s = 0; s < 2; ++s) {
+            const float side = s == 0 ? -1.0f : 1.0f;
             for (int cix = 0; cix < cols; ++cix) {
-                Vec3 p = pointAt(i, float(s) * lats[cix]);
+                Vec3 p = pointAt(i, side * lats[cix]);
                 p.y = terrainHeightAt(p.x, p.z);
-                // 法線は高度場の勾配から (有限差分)。面ではなく頂点法線なので
-                // 坂が滑らかに陰影する。
-                const float e = 6.0f;
-                float hx = terrainHeightAt(p.x + e, p.z) - terrainHeightAt(p.x - e, p.z);
-                float hz = terrainHeightAt(p.x, p.z + e) - terrainHeightAt(p.x, p.z - e);
-                Vec3 normal = normalize(Vec3{-hx, 2.0f * e, -hz});
-                // 色: 平地は草、斜面と高所は岩、頂上付近は雪。森の斑も混ぜる。
+                cell(r, s, cix) = p;
+            }
+        }
+    }
+    std::vector<std::uint32_t> grid(pos.size());
+    for (int r = 0; r < rows; ++r) {
+        const int rp = (r + rows - 1) % rows;
+        const int rn = (r + 1) % rows;
+        for (int s = 0; s < 2; ++s) {
+            for (int cix = 0; cix < cols; ++cix) {
+                const int cp = cix > 0 ? cix - 1 : cix;
+                const int cn = cix + 1 < cols ? cix + 1 : cix;
+                Vec3 p = cell(r, s, cix);
+                // 接線 2 本の外積が法線。頂点法線なので坂は滑らかに陰影する。
+                Vec3 along = cell(rn, s, cix) - cell(rp, s, cix);
+                Vec3 across = cell(r, s, cn) - cell(r, s, cp);
+                Vec3 normal = cross(across, along);
+                if (normal.y < 0.0f) {
+                    normal = normal * -1.0f;
+                }
+                normal = normalize(normal);
+                // 色: 平地は草、森の斑、斜面と高所は岩、頂上は雪。
                 TrackPose q = track_.query(p.x, p.z, p.y, -1.0f);
                 float relief = p.y - q.centerY;
                 float slope = 1.0f - normal.y;
@@ -343,9 +409,10 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
                     float snow = std::min(1.0f, (relief - 95.0f) / 40.0f);
                     col = col * (1.0f - snow) + Vec3{0.87f, 0.89f, 0.93f} * snow;
                 }
-                unsigned jh = treeHash(i * 3 + cix, float(s));
+                unsigned jh = treeHash(r * 3 + cix, s == 0 ? -1.0f : 1.0f);
                 float jitter = 0.96f + float((jh >> 12) % 100u) / 100.0f * 0.08f;
-                grid.push_back(uint32_t(mesh.vertices.size() / 9));
+                grid[(size_t(r) * 2 + size_t(s)) * size_t(cols) + size_t(cix)] =
+                    uint32_t(mesh.vertices.size() / 9);
                 mesh.addVertex(p, normal, col * jitter);
             }
         }

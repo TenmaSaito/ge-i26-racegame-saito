@@ -222,7 +222,7 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         float far = builder.terrainHeightAt(s0.x + g0.rightX * 800.0f, s0.z + g0.rightZ * 800.0f);
         std::printf("self-test terrain near %.1f far %.1f (center %.1f)\n", near, far, g0.centerY);
         if (std::fabs(near - g0.centerY) > 0.01f) return 16;
-        if (far < g0.centerY + 25.0f) return 17;
+        if (far < g0.centerY + 4.0f) return 17;  // 丘+遠景で必ず少しは盛り上がる
     }
     // 火花: 壁に擦らせた車を与えると火花が出ること。
     {
