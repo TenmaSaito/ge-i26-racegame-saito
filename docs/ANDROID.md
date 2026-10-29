@@ -13,7 +13,7 @@
 | 層 | ファイル | 知ってよいもの / Android での扱い |
 |---|---|---|
 | ドメイン (最内) | car / track / scenery / tuning / geom / meshbuild | 標準ライブラリのみ。SDL・GL・OS を知らない。無変更 |
-| アプリケーション | game / hud / camera / effects / carmodel | ドメイン＋ポートだけを見る。無変更 |
+| アプリケーション | game (Game クラス) / hud (Hud) / camera (Orbit) / effects (Effects) / race (Race) / carmodel | ドメイン＋ポートだけを見る。状態は各クラスに閉じ、Game が統括する。無変更 |
 | ポート宣言 | render.hpp (IRenderer) / input.hpp (UiActions 等) | SDL を含まない宣言だけ |
 | アダプタ (外側) | render.cpp (OpenGL) / input.cpp (SDL・Gamepad API) / platform.cpp (SDL・窓・保存・ループ) | SDL / GL / Emscripten はここだけに現れる |
 | 合成ルート | main.cpp | 全部品の配線だけ (SDL すら直接触らない) |

@@ -10,6 +10,8 @@
 
 #include "car.hpp"  // DriveInput（ロジック層の型）
 
+#include <string>
+
 struct SDL_Window;  // 実物は外側だけが知る（前方宣言のみ）
 
 // パッドのトリガ操作（押した瞬間だけ立つ）。
@@ -49,5 +51,9 @@ void detach();
 UiActions pollUi(bool tuningOpen);
 // 現在の物理入力状態から運転入力を組み立てる (パッドのトリガは pulse へ)。
 DriveInput sampleDrive(PadPulse& pulse, bool carDrifting);
+
+// 接続中のパッド名 (デバッグ表示用)。無ければ "NONE" 始まりの案内文。
+// ブラウザ版はボタンを押すまでパッドが見えない仕様なので、その旨も返す。
+std::string padStatus();
 
 }  // namespace input

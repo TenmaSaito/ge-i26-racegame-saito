@@ -104,18 +104,19 @@ int main(int argc, char** argv) {
         }
     }
 
-    Game app;
+    // ゲーム本体を組み立てる (タイトルはコース名、コースは読み込み済み)。
+    std::string title = "Suzuka Circuit";
     if (stem == "flow") {
-        app.title = "Flow Circuit";
+        title = "Flow Circuit";
     }
     if (stem == "coast") {
-        app.title = "Coast Circuit";
+        title = "Coast Circuit";
     }
-    app.track = std::move(track);
+    Game app{title, std::move(track)};
     if (!platform::createWindow(app)) {
         return 1;
     }
-    gameInit(app);
+    app.init();
     platform::runMainLoop(app);
     platform::destroyWindow(app);  // 終了処理はすべて外側 (platform) の担当
     return 0;

@@ -1,17 +1,29 @@
 #pragma once
 // ============================================================================
-// hud.hpp ― 画面表示 (HUD) 層の宣言
-// 役割: 速度・ラップ・ミニマップ・デバッグ・チューニング画面など、
-//       2D 表示の合成だけを担当する。描画そのものは Renderer に任せる。
+// hud.hpp ― HUD 描画クラス (Hud) の宣言
+// 役割: 速度・ラップ・ミニマップ・デバッグ・チューニング画面の合成。
+//       値の計算はせず、Game の状態を Renderer の 2D 描画へ写すだけ。
+//       表示専用の状態 (ミニマップの範囲キャッシュ) はこのクラスが持つ。
 // ============================================================================
 
-struct Game;
+class Game;
 
+// 秒数を "M:SS.mmm" 形式にする (負数なら "--:--.---")。
 void formatTime(char* buf, int size, float seconds);
-void drawHud(Game& app);
-void drawMinimap(Game& app);
-void drawDriftDebug(Game& app);
-void drawTuning(Game& app);
-#ifdef __EMSCRIPTEN__
-void pushDebugToPage(Game& app);
-#endif
+
+class Hud {
+public:
+    // HUD 全体を描く (Game::frame の最後に呼ばれる)。
+    void draw(Game& app);
+
+private:
+    void drawMinimap(Game& app);       // コース全体図と自車マーカー
+    void drawDriftDebug(Game& app);    // ドリフト状態の内訳 (ネイティブのみ)
+    void drawTuning(Game& app);        // チューニングパネル (T キー)
+    void sendDebugToPage(Game& app);   // ブラウザ版: ページ側パネルへ送る
+
+    // ミニマップの表示範囲キャッシュ。コース固定なので初回だけ全サンプルを
+    // 走査して求め、以降は使い回す (毎フレームの全数走査を避けるため)。
+    float mmMinX_ = 0, mmMaxX_ = 0, mmMinZ_ = 0, mmMaxZ_ = 0;
+    bool mmReady_ = false;
+};

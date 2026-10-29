@@ -1,93 +1,128 @@
 #pragma once
 // ============================================================================
-// game.hpp ― ゲーム全体の状態 (Game) と進行の入口 (アプリケーション層)
-// 役割: アプリの状態を 1 か所に集約し、1 フレームの進行 (gameFrame) と
-//       初期化の宣言を持つ。
+// game.hpp ― ゲームクラス (Game) の宣言 (アプリケーション層)
+// 役割: ゲーム全体の状態と進行 (init / frame) を 1 つのクラスに閉じる。
+//       状態はすべて private に持ち、外からはメソッドと参照アクセサでのみ
+//       触れる。初期化や 1 フレームの段取りはクラスの内側の仕事であり、
+//       呼び出し側 (main / platform) は手順を知らなくてよい。
 // レイヤー方針: この層は SDL / OpenGL を直接知らない。描画は render.hpp の
-//       ポート (IRenderer) 経由、入力は input.hpp のポート経由。
-//       ウィンドウや GL の実物は外側 (platform) が所有する。
-//       外側の能力が要るときは、下の「ポート (差し込み口)」に外側が
-//       実装を差し込む (依存性逆転)。内側から外側への直接依存は作らない。
+//       ポート (IRenderer)、入力は input.hpp のポート経由。外側の能力が
+//       要るときは、下の「差し込み口」に外側が実装を登録する (依存性逆転)。
 // ============================================================================
 
-#include "camera.hpp"   // Orbit（カメラ状態）
+#include "camera.hpp"   // Orbit (カメラ)
 #include "car.hpp"      // Car, DriveInput
-#include "effects.hpp"  // SmokePuff, TrailPoint
+#include "effects.hpp"  // Effects (煙・光跡・タイヤ痕)
+#include "race.hpp"     // Race (周回・計時)
 #include "render.hpp"   // IRenderer (ポート), GpuMesh
 #include "track.hpp"    // Track
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
-// レースの周回管理（ラップ・ベスト・計測状態）。
-struct Race {
-    int completed = 0;
-    bool timing = false;
-    float lap = 0;
-    float best = -1;
-    float prevS = -1;
+class Hud;  // HUD 描画器 (hud.hpp)。Game が 1 つ保持する
+
+class Game {
+public:
+    // title はウィンドウタイトル (コース名)、track は読み込み済みコース。
+    Game(std::string title, Track track);
+    ~Game();
+
+    // --- 外側からの差し込み口 (platform が起動時に登録する) ----------------
+    // 描画実装を差し込む (所有は platform 側。Game は借りるだけ)。
+    void installRenderer(IRenderer* renderer) { renderer_ = renderer; }
+    IRenderer* renderer() const { return renderer_; }
+    // ブラウザのページ側デバッグ欄への送信口 (ネイティブでは未登録でよい)。
+    void setDebugSink(std::function<void(const char*)> sink) { debugSink_ = std::move(sink); }
+    // チューニング保存の実行口 (引数は serializeTuning() の文字列)。
+    void setSaveTuningSink(std::function<void(const std::string&)> sink) { saveSink_ = std::move(sink); }
+    // デバッグ文字列を差し込み先へ送る (未登録なら何もしない)。
+    void sendDebug(const char* text) const {
+        if (debugSink_) debugSink_(text);
+    }
+    bool hasDebugSink() const { return static_cast<bool>(debugSink_); }
+
+    // --- 進行 --------------------------------------------------------------
+    const std::string& title() const { return title_; }
+    // 初期化: メッシュ構築と GPU アップロード、車両リセット。
+    // renderer の差し込みが済んでいる前提で呼ぶ。
+    void init();
+    // 1 フレームの進行 (入力→物理→演出→カメラ→描画)。
+    // 経過時間は外側 (platform のループ) が測って渡す。
+    void frame(double dtSeconds);
+    bool running() const { return running_; }  // 終了要求が出たら false
+
+    // --- 協働モジュール向けの参照 -------------------------------------------
+    Car& car() { return car_; }
+    const Car& car() const { return car_; }
+    const Track& track() const { return track_; }
+    const Race& race() const { return race_; }
+    Orbit& camera() { return camera_; }
+    const Orbit& camera() const { return camera_; }
+    const DriveInput& lastInput() const { return lastInput_; }  // 直近の運転入力 (表示用)
+    bool paused() const { return paused_; }
+    bool showHelp() const { return showHelp_; }
+    bool showDriftDebug() const { return showDriftDebug_; }
+    bool showTuning() const { return showTuning_; }
+    int tuneIndex() const { return tuneIndex_; }
+    int carSpec() const { return carSpec_; }
+    float fps() const { return fpsSm_; }
+
+    // 車種を切り替える (性能倍率＋ドリフト調整値の差し替えと保存)。
+    void applyCarSpec(int index);
+
+private:
+    // レースを初期状態に戻す (車・計時・演出・カメラをまとめて)。
+    void resetRace();
+    // 現在のチューニング値を差し込み口経由で保存する。
+    void saveTuningNow();
+
+    // --- 基本情報 ---
+    std::string title_;  // ウィンドウタイトル (コース名)
+    Track track_;        // コースデータ
+    Car car_;            // 自車
+    Race race_;          // 周回・計時
+    Orbit camera_;       // カメラ状態
+    Effects effects_;    // 煙・光跡・タイヤ痕
+    std::unique_ptr<Hud> hud_;  // HUD 描画器 (ミニマップ等の表示状態を持つ)
+
+    // --- ポートと差し込み (実物は外側が持つ) ---
+    IRenderer* renderer_ = nullptr;  // 描画実装 (借用)
+    std::function<void(const char*)> debugSink_;              // ページ側デバッグ送信
+    std::function<void(const std::string&)> saveSink_;        // チューニング保存
+
+    // --- GPU メッシュ (renderer_ にアップロード済みの形状) ---
+    GpuMesh body_;        // 車体
+    GpuMesh wheel_;       // ホイール
+    GpuMesh shadow_;      // 車の影 (平面クワッド)
+    GpuMesh backdrop_;    // 背景 (地面＋山並み)
+    GpuMesh nose_;        // ドライバーズアイ用の鼻先
+    GpuMesh lampsOff_;    // テールランプ (消灯)
+    GpuMesh lampsOn_;     // テールランプ (ドリフト中)
+    GpuMesh lampsBright_; // テールランプ (ブレーキ)
+    std::vector<GpuMesh> scenery_;        // 景観チャンク (距離カリングして描く)
+    std::vector<Vec3> sceneryCenters_;    // 各チャンクの中心 (カリング用)
+
+    // --- 進行状態 ---
+    bool running_ = true;         // メインループの継続フラグ
+    bool paused_ = false;         // ポーズ中か (P キー)
+    bool showHelp_ = true;        // キー説明の表示 (H キー、ネイティブのみ)
+    bool showDriftDebug_ = true;  // ドリフトデバッグ表示 (B キー)
+    bool showTuning_ = false;     // チューニングパネル表示 (T キー)
+    int tuneIndex_ = 0;           // パネルで選択中の項目
+    int carSpec_ = 0;             // 選択中の車種 (1/2/3 キー)
+    DriveInput lastInput_;        // 直近の運転入力 (デバッグ表示用に保持)
+    float fpsSm_ = 60.0f;         // FPS 表示 (平滑化済み)
+    double accumulator_ = 0;      // 物理固定ステップ (60Hz) の端数貯金
+
+    // --- 描画用の補間ポーズ ---
+    // 物理は固定 60Hz で進むため、そのまま描くと表示タイミングとのずれで
+    // 前後にガクつく。1 ステップ前と現在をアキュムレータの端数で補間する。
+    float prevX_ = 0, prevY_ = 0, prevZ_ = 0, prevYaw_ = 0, prevSlip_ = 0;  // 1 ステップ前
+    float viewX_ = 0, viewY_ = 0, viewZ_ = 0, viewYaw_ = 0, viewSlip_ = 0;  // 補間結果
+    bool viewReady_ = false;      // 補間ポーズが有効か
+    float bodyPitchSm_ = 0;       // 車体の前後傾き (平滑化済み)
+    float bodyRollSm_ = 0;        // 車体の左右傾き (平滑化済み)
 };
-
-// ゲーム全体の状態。所有は main が持ち、各モジュールは Game& を受け取って働く。
-struct Game {
-    std::string title = "Suzuka Circuit";  // ウィンドウタイトル（コース名）
-
-    // --- ポート (外側が実装を差し込む口) ---
-    IRenderer* renderer = nullptr;  // 描画実装 (platform::createWindow が生成)
-    // ブラウザのページ側デバッグ欄へ文字列を渡す口 (ネイティブでは未設定)。
-    std::function<void(const char*)> debugSink;
-    // チューニング値の保存口 (引数は serializeTuning() の文字列)。
-    std::function<void(const std::string&)> saveTuningText;
-    Track track;
-    Car car;
-    GpuMesh body;
-    GpuMesh wheel;
-    GpuMesh shadow;
-    GpuMesh backdrop;
-    GpuMesh nose;
-    float mmMinX = 0, mmMaxX = 0, mmMinZ = 0, mmMaxZ = 0;  // ミニマップ範囲のキャッシュ
-    bool mmReady = false;
-    GpuMesh lampsOff;
-    GpuMesh lampsOn;
-    GpuMesh lampsBright;
-    std::vector<GpuMesh> scenery;      // 景観チャンク（距離カリングして描く）
-    std::vector<Vec3> sceneryCenters;
-    int carSpec = 0;                   // 選択中の車種（1/2/3 キー）
-    float bodyRollSm = 0;              // 車体の傾き（平滑化済み）
-    float fpsSm = 60.0f;               // FPS 表示（平滑化済み）
-    // 描画用の補間ポーズ。物理は固定 60Hz で進むため、そのまま描くと
-    // 表示タイミングとのずれで前後にガクつく。1 ステップ前と現在を
-    // アキュムレータの端数で補間してから描く。
-    float prevX = 0, prevY = 0, prevZ = 0, prevYaw = 0, prevSlip = 0;
-    float viewX = 0, viewY = 0, viewZ = 0, viewYaw = 0, viewSlip = 0;
-    bool viewReady = false;
-    float bodyPitchSm = 0;
-    std::vector<TrailPoint> trailL, trailR;  // ドリフト中のテールランプ軌跡
-    Race race;
-    Orbit camera;
-    std::vector<SmokePuff> smoke;
-    float smokeAcc = 0;
-    unsigned smokeSeed = 12345;
-    bool running = true;
-    bool paused = false;
-    bool showHelp = true;
-    bool showDriftDebug = true;  // ドリフトのデバッグ表示（B キーで切替、既定はオン）
-    DriveInput lastInput;        // デバッグ表示用に直近の入力を覚えておく
-    bool showTuning = false;     // ドリフトのチューニングパネル（T キーで開閉）
-    int tuneIndex = 0;           // パネルで選択中の項目
-    double accumulator = 0;
-};
-
-// 初期化（メッシュ構築と GPU へのアップロード、車両リセット）。
-// ウィンドウ生成と renderer の差し込みは platform::createWindow が先に済ませる。
-void gameInit(Game& app);
-// 1 フレームの進行（入力取得→物理→描画）。platform のループから呼ばれ、
-// 経過時間 dtSeconds は外側が測って渡す（この層は時計を持たない）。
-void gameFrame(Game& app, double dtSeconds);
-// 終了処理は持たない: ウィンドウ・GL・入力の破棄はすべて外側
-// (platform::destroyWindow) の担当。
-
-// レース状態のリセットと周回判定。game.cpp 内の小物。
-void resetRace(Game& app);
-void tickRace(Race& race, float s, float length, float dt);

@@ -1,42 +1,61 @@
 // ============================================================================
-// effects.cpp ― 演出層（タイヤ煙・テールランプの光跡）
-// 役割: ドリフトに付随する一時的な視覚効果の生成・更新・描画。
-//       物理には一切干渉しない。
+// effects.cpp ― 演出クラス (Effects) の実装
+// 役割: タイヤ煙・テールランプの光跡・タイヤ痕の生成／更新／描画。
+//       物理には一切干渉しない (Car の状態を読むだけ)。
 // ============================================================================
 
 #include "effects.hpp"
 
-#include "game.hpp"
-#include "render.hpp"
+#include "camera.hpp"  // Orbit
+#include "car.hpp"     // Car
+#include "render.hpp"  // IRenderer
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
-void updateSmoke(Game& app, float dt) {
-    Car& car = app.car;
-    for (SmokePuff& p : app.smoke) {
+namespace {
+// タイヤ痕の寿命 (秒)。過ぎた痕から路面色へ溶けて消える。
+constexpr float kMarkLife = 30.0f;
+// タイヤ痕の最大区間数。超えたら古いものから捨てる (メモリと描画の上限)。
+constexpr size_t kMarkMax = 2600;
+}  // namespace
+
+void Effects::clear() {
+    smoke_.clear();
+    trailL_.clear();
+    trailR_.clear();
+    marks_.clear();
+    markChain_ = false;
+    smokeAcc_ = 0;
+}
+
+void Effects::update(const Car& car, float dt) {
+    // --- タイヤ煙: 既存の粒を漂わせ、寿命が来たものを消す -----------------
+    for (SmokePuff& p : smoke_) {
         p.age += dt;
-        p.vel.y += 0.7f * dt;
+        p.vel.y += 0.7f * dt;  // 煙は軽いので少しずつ上昇する
         float drag = std::max(0.0f, 1.0f - 0.9f * dt);
         p.vel = p.vel * drag;
         p.pos = p.pos + p.vel * dt;
     }
-    app.smoke.erase(std::remove_if(app.smoke.begin(), app.smoke.end(),
-                                   [](const SmokePuff& p) { return p.age >= p.life; }),
-                    app.smoke.end());
-    auto rnd = [&app]() {
-        app.smokeSeed = app.smokeSeed * 1664525u + 1013904223u;
-        return float((app.smokeSeed >> 8) & 0xFFFFu) / 65535.0f;
+    smoke_.erase(std::remove_if(smoke_.begin(), smoke_.end(),
+                                [](const SmokePuff& p) { return p.age >= p.life; }),
+                 smoke_.end());
+    // --- タイヤ煙: ドリフト中だけ後輪から新しい粒を出す -------------------
+    auto rnd = [this]() {
+        smokeSeed_ = smokeSeed_ * 1664525u + 1013904223u;
+        return float((smokeSeed_ >> 8) & 0xFFFFu) / 65535.0f;
     };
     if (car.drifting && car.driftAmount > 0.45f && std::fabs(car.slipAngle) > 0.12f &&
-        std::fabs(car.speed) > 6.0f) {
+        std::fabs(car.speed) > 6.0f && !car.airborne) {
         float rate = 45.0f + std::min(45.0f, std::fabs(car.lateralSpeed) * 3.0f);
-        app.smokeAcc += rate * dt;
+        smokeAcc_ += rate * dt;
         Vec3 fwd{std::sin(car.yaw), 0, std::cos(car.yaw)};
         Vec3 right{std::cos(car.yaw), 0, -std::sin(car.yaw)};
-        while (app.smokeAcc >= 1.0f) {
-            app.smokeAcc -= 1.0f;
-            float side = (app.smoke.size() % 2 == 0) ? 1.0f : -1.0f;
+        while (smokeAcc_ >= 1.0f) {
+            smokeAcc_ -= 1.0f;
+            float side = (smoke_.size() % 2 == 0) ? 1.0f : -1.0f;
             SmokePuff p;
             p.pos = Vec3{car.x, car.y + 0.25f, car.z} + right * (side * 0.82f) + fwd * -1.38f;
             p.pos.x += (rnd() - 0.5f) * 0.3f;
@@ -45,29 +64,93 @@ void updateSmoke(Game& app, float dt) {
                          1.0f + rnd() * 0.8f,
                          -car.velZ * 0.12f + (rnd() - 0.5f) * 0.8f};
             p.life = 0.8f + rnd() * 0.5f;
-            app.smoke.push_back(p);
-            if (app.smoke.size() > 260) {
-                app.smoke.erase(app.smoke.begin());
+            smoke_.push_back(p);
+            if (smoke_.size() > 260) {
+                smoke_.erase(smoke_.begin());
             }
         }
     } else {
-        app.smokeAcc = 0;
+        smokeAcc_ = 0;
     }
+
+    // --- 光跡: ランプ位置の履歴を残し、古い点を消す ------------------------
+    for (auto* trail : {&trailL_, &trailR_}) {
+        for (auto& pt : *trail) pt.age += dt;
+        trail->erase(std::remove_if(trail->begin(), trail->end(),
+                                    [](const TrailPoint& pt) { return pt.age > 1.15f; }),
+                     trail->end());
+    }
+    if (car.drifting && car.driftAmount > 0.3f) {
+        const float sides[2] = {-1.0f, 1.0f};
+        std::vector<TrailPoint>* trails[2] = {&trailL_, &trailR_};
+        for (int i = 0; i < 2; ++i) {
+            Vec3 pos = lampWorldPos(car, sides[i]);
+            if (trails[i]->empty() || length(pos - trails[i]->back().pos) > 0.5f) {
+                trails[i]->push_back({pos, 0.0f});
+            }
+        }
+    }
+
+    // --- タイヤ痕: ドリフトで後輪が滑った帯を路面に残す -------------------
+    for (auto& m : marks_) m.age += dt;
+    marks_.erase(std::remove_if(marks_.begin(), marks_.end(),
+                                [](const SkidMark& m) { return m.age > kMarkLife; }),
+                 marks_.end());
+    // 出す条件: ドリフト中・接地している・舗装の上・それなりの速度。
+    // 空中 (airborne) ではタイヤが路面に触れていないので出さない。
+    const bool laying = car.drifting && car.driftAmount > 0.3f && !car.airborne &&
+                        car.onAsphalt && std::fabs(car.speed) > 5.0f;
+    if (laying) {
+        Vec3 fwd{std::sin(car.yaw), 0, std::cos(car.yaw)};
+        Vec3 right{std::cos(car.yaw), 0, -std::sin(car.yaw)};
+        Vec3* lasts[2] = {&lastMarkL_, &lastMarkR_};
+        const float sides[2] = {-1.0f, 1.0f};
+        for (int i = 0; i < 2; ++i) {
+            // 後輪の接地位置 (車体中心から左右 0.82m、後方 1.38m、路面すれすれ)。
+            Vec3 pos = Vec3{car.x, car.y + 0.04f, car.z} + right * (sides[i] * 0.82f) + fwd * -1.38f;
+            if (markChain_) {
+                float d2 = (pos.x - lasts[i]->x) * (pos.x - lasts[i]->x) +
+                           (pos.z - lasts[i]->z) * (pos.z - lasts[i]->z);
+                if (d2 > 0.36f) {  // 0.6m 以上進んだら 1 区間として刻む
+                    if (d2 < 25.0f) {  // 5m 以上の跳びはリセット等なのでつながない
+                        marks_.push_back({*lasts[i], pos, 0.0f, clampf(car.driftAmount, 0.0f, 1.0f)});
+                    }
+                    *lasts[i] = pos;
+                }
+            } else {
+                *lasts[i] = pos;  // 出し始めは起点だけ置く
+            }
+        }
+        if (marks_.size() > kMarkMax) {
+            marks_.erase(marks_.begin(), marks_.begin() + (marks_.size() - kMarkMax));
+        }
+    }
+    markChain_ = laying;
+}
+
+// テールランプのワールド位置 (光跡の記録用)。車体後端の少し内側・高さ 0.47m。
+Vec3 Effects::lampWorldPos(const Car& car, float side) const {
+    Vec3 fwd{std::sin(car.yaw), 0, std::cos(car.yaw)};
+    Vec3 right{fwd.z, 0, -fwd.x};
+    Vec3 p{car.x, car.y + 0.47f, car.z};
+    p = p + right * (side * 0.55f);
+    p = p + fwd * -2.1f;
+    return p;
 }
 
 // 煙をカメラ向きの円盤として描く（八角形のビルボードを毎フレーム構築）。
-void drawSmoke(Game& app) {
-    if (app.smoke.empty()) {
+void Effects::drawSmoke(IRenderer& renderer, const Orbit& camera) const {
+    if (smoke_.empty()) {
         return;
     }
-    Vec3 fwd = normalize(app.camera.look - app.camera.eye);
+    Vec3 fwd = normalize(camera.look - camera.eye);
     Vec3 right = normalize(cross(fwd, Vec3{0, 1, 0}));
     Vec3 up = cross(right, fwd);
     // 法線は真上固定にする。カメラ向きだと太陽との内積で真っ黒になり、
     // 煙ではなく黒い塊に見えてしまうため（上面光で明るく保つ）。
     Vec3 n{0, 1, 0};
     CpuMesh mesh;
-    for (const SmokePuff& p : app.smoke) {
+    for (const SmokePuff& p : smoke_) {
         float t = p.age / p.life;
         float radius = 0.35f + 1.35f * t;
         Vec3 color = Vec3{0.52f, 0.52f, 0.55f} * (1.0f - t) + Vec3{0.88f, 0.90f, 0.92f} * t;
@@ -83,45 +166,13 @@ void drawSmoke(Game& app) {
                                 base + 1 + static_cast<std::uint32_t>((k + 1) % 8));
         }
     }
-    app.renderer->drawDynamic(mesh);
+    renderer.drawDynamic(mesh);
 }
 
-
-Vec3 lampWorldPos(const Game& app, float side) {
-    Vec3 fwd{std::sin(app.car.yaw), 0, std::cos(app.car.yaw)};
-    Vec3 right{fwd.z, 0, -fwd.x};
-    Vec3 p{app.car.x, app.car.y + 0.47f, app.car.z};
-    p = p + right * (side * 0.55f);
-    p = p + fwd * -2.1f;
-    return p;
-}
-
-// ドリフト中、テールランプの位置履歴を残す（長時間露光の光跡になる）。
-void updateTrails(Game& app, float dt) {
-    for (auto* trail : {&app.trailL, &app.trailR}) {
-        for (auto& pt : *trail) pt.age += dt;
-        trail->erase(std::remove_if(trail->begin(), trail->end(),
-                                    [](const TrailPoint& pt) { return pt.age > 1.15f; }),
-                     trail->end());
-    }
-    if (app.car.drifting && app.car.driftAmount > 0.3f) {
-        const float sides[2] = {-1.0f, 1.0f};
-        std::vector<TrailPoint>* trails[2] = {&app.trailL, &app.trailR};
-        for (int i = 0; i < 2; ++i) {
-            Vec3 pos = lampWorldPos(app, sides[i]);
-            if (trails[i]->empty() || length(pos - trails[i]->back().pos) > 0.5f) {
-                trails[i]->push_back({pos, 0.0f});
-            }
-        }
-    }
-}
-
-void drawTrails(Game& app) {
+// 光跡を帯として描く。点列を幅 0.17m のリボンにし、古い方ほど暗くする。
+void Effects::drawTrails(IRenderer& renderer) const {
     CpuMesh mesh;
-    Vec3 camDir = app.camera.look - app.camera.eye;
-    if (length(camDir) < 0.001f) return;
-    camDir = normalize(camDir);
-    std::vector<TrailPoint>* trails[2] = {&app.trailL, &app.trailR};
+    const std::vector<TrailPoint>* trails[2] = {&trailL_, &trailR_};
     for (auto* trail : trails) {
         for (size_t i = 1; i < trail->size(); ++i) {
             const TrailPoint& a = (*trail)[i - 1];
@@ -139,7 +190,7 @@ void drawTrails(Game& app) {
             Vec3 a0 = a.pos + w * -hw, a1 = a.pos + w * hw;
             Vec3 b0 = b.pos + w * -hw, b1 = b.pos + w * hw;
             // 2 三角形を色フェード付きで直接積む（addQuad は単色なので手書き）
-            auto tri = [&](Vec3 p, Vec3 q, Vec3 r, Vec3 c1, Vec3 c2, Vec3 c3) {
+            auto tri = [&mesh](Vec3 p, Vec3 q, Vec3 r, Vec3 c1, Vec3 c2, Vec3 c3) {
                 std::uint32_t base = std::uint32_t(mesh.vertices.size() / 9);
                 mesh.addVertex(p, {0, 1, 0}, c1);
                 mesh.addVertex(q, {0, 1, 0}, c2);
@@ -150,6 +201,36 @@ void drawTrails(Game& app) {
             tri(a0, b1, a1, col(a.age), col(b.age), col(a.age));
         }
     }
-    if (!mesh.vertices.empty()) app.renderer->drawDynamic(mesh);
+    if (!mesh.vertices.empty()) renderer.drawDynamic(mesh);
 }
 
+// タイヤ痕を路面の帯として描く。新しい痕はほぼ黒、古くなるほど
+// 路面色 (アスファルトのグレー) へ寄せて「溶けて消える」ように見せる。
+void Effects::drawMarks(IRenderer& renderer) const {
+    if (marks_.empty()) {
+        return;
+    }
+    const Vec3 ink{0.05f, 0.05f, 0.055f};    // 焼けたゴムの色
+    const Vec3 road{0.23f, 0.23f, 0.24f};    // 路面色 (フェードの行き先)
+    CpuMesh mesh;
+    for (const SkidMark& m : marks_) {
+        Vec3 seg = m.to - m.from;
+        seg.y = 0;
+        if (length(seg) < 0.001f) continue;
+        // 帯の幅方向 (進行と直交する水平方向)。タイヤ幅 ≒ 0.3m。
+        Vec3 w = normalize(cross(seg, Vec3{0, 1, 0})) * 0.15f;
+        float fade = clampf(1.0f - m.age / kMarkLife, 0.0f, 1.0f);
+        float k = (0.25f + 0.75f * fade) * m.strength;  // 残り具合
+        Vec3 col = road * (1.0f - k) + ink * k;
+        Vec3 a0 = m.from - w, a1 = m.from + w;
+        Vec3 b0 = m.to - w, b1 = m.to + w;
+        std::uint32_t base = std::uint32_t(mesh.vertices.size() / 9);
+        mesh.addVertex(a0, {0, 1, 0}, col);
+        mesh.addVertex(b0, {0, 1, 0}, col);
+        mesh.addVertex(b1, {0, 1, 0}, col);
+        mesh.addVertex(a1, {0, 1, 0}, col);
+        mesh.addRawTriangle(base, base + 1, base + 2);
+        mesh.addRawTriangle(base, base + 2, base + 3);
+    }
+    if (!mesh.vertices.empty()) renderer.drawDynamic(mesh);
+}

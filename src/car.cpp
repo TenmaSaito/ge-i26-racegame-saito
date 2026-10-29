@@ -15,6 +15,9 @@ constexpr float kRolling = 0.9f;
 constexpr float kWheelbase = 3.05f;
 constexpr float kSteerRate = 2.6f;
 constexpr float kWheelRadius = 0.34f;
+constexpr float kGravity = 15.0f;  // 重力加速度 (m/s^2)。現実 (9.8) より強く、
+                                   // ゲーム速度でも「ふわっ」が短すぎない値。
+                                   // 弱いほど浮遊感は増すが着地が間延びする。
 
 float maxSteerAt(float speed) {
     return 0.46f / (1.0f + std::fabs(speed) * 0.085f);
@@ -35,6 +38,8 @@ void Car::reset(const Track& track) {
     steerAngle = 0;
     steerSm = 0;
     driftLockout = 0;
+    vy = 0;
+    airborne = false;
     wheelSpin = 0;
     brakeHold = 0;
     velX = 0;
@@ -320,7 +325,9 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
         force -= input.brake * kReverseAccel;
     } else if (input.throttle > 0.0f && speed > -0.4f) {
         float ratio = clampf(speed / (kMaxSpeed * topSpeedMul), 0.0f, 1.0f);
-        force += input.throttle * kAccel * powerMul * (1.0f - ratio * ratio);
+        // 空中ではタイヤが地面を蹴れないので駆動は弱める（浮遊中の見た目と釣り合う）。
+        force += input.throttle * kAccel * powerMul * (1.0f - ratio * ratio) *
+                 (airborne ? 0.35f : 1.0f);
     }
     force -= kDrag * speed * std::fabs(speed);
     if (std::fabs(speed) > 0.05f) {
@@ -444,11 +451,35 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
     // 段差状に飛ぶ坂があり、そのまま代入すると上下にガクつくので、
     // 短い時定数（約 45ms）で追わせて段差だけを均す。
     {
+        // 路面の高さ（中心高＋バンク）。接地・着地の判定はこの高さと比べる。
         float targetY = ground.centerY + bankLat * ground.cross;
-        float k = 1.0f - std::exp(-22.0f * dt);
-        // 段差が大きい場所（標高データの継ぎ目など）では、指数追随だけだと
-        // 1 フレームで大きく動くので、上下速度にも上限を付けて数フレームに分ける。
-        y += clampf((targetY - y) * k, -18.0f * dt, 18.0f * dt);
+        if (!airborne) {
+            // 接地中: まず従来どおり滑らかに路面へ追わせる。最寄り区間の
+            // 切り替わりで中心高が段差状に飛ぶ坂があり、そのまま代入すると
+            // 上下にガクつくので、短い時定数（約 45ms）と上下速度の上限で均す。
+            float prevY = y;
+            float k = 1.0f - std::exp(-22.0f * dt);
+            y += clampf((targetY - y) * k, -18.0f * dt, 18.0f * dt);
+            // 追随結果から実効の上下速度を逆算しておく（離陸時の初速になる）。
+            vy = (y - prevY) / dt;
+            // 離陸判定: 上向きに動いていたのに地面が下へ逃げ始めたら、
+            // 車は慣性で放物線に入る（急な坂の頂点で「ふわっ」と浮く部分）。
+            // 下り坂を下っている最中 (vy < 0) は発動しないので、
+            // ただの下りで勝手に浮くことはない。
+            if (vy > 0.9f && targetY < y - 0.02f) {
+                airborne = true;
+            }
+        }
+        if (airborne) {
+            // 空中: 重力だけで落ちる放物線。地面に届いたら着地して接地へ戻る。
+            vy = std::max(vy - kGravity * dt, -40.0f);  // 落下速度には上限
+            y += vy * dt;
+            if (y <= targetY) {
+                y = targetY;
+                vy = 0;
+                airborne = false;
+            }
+        }
     }
     onAsphalt = std::fabs(ground.lateral) <= track.halfWidth + 0.15f;
 }

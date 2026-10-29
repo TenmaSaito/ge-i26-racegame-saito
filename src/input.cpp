@@ -20,6 +20,10 @@
 #include <cmath>
 #include <cstring>
 
+#ifdef __EMSCRIPTEN__
+extern std::string gLastPadId;  // 実体は Gamepad API 読み取り部の近くに置く
+#endif
+
 namespace {
 
 // このアダプタが所有する入力デバイス。Game はパッドやウィンドウを知らない。
@@ -75,6 +79,23 @@ namespace input {
 void attachWindow(SDL_Window* window) {
     gWindow = window;
     openPad();
+}
+
+// パッドの認識状態。ネイティブは SDL が掴んだ名前、ブラウザ版は
+// Gamepad API で最後に見えたパッドの ID を返す。
+std::string padStatus() {
+#ifndef __EMSCRIPTEN__
+    if (gPad) {
+        const char* name = SDL_GameControllerName(gPad);
+        return name ? name : "GAMEPAD";
+    }
+    return "NONE";
+#else
+    if (!::gLastPadId.empty()) {  // readBrowserPad が更新するグローバル
+        return ::gLastPadId;
+    }
+    return "NONE - PRESS ANY PAD BUTTON";
+#endif
 }
 
 void detach() {
@@ -139,6 +160,7 @@ UiActions pollUi(bool tuningOpen) {
 }  // namespace input
 
 #ifdef __EMSCRIPTEN__
+std::string gLastPadId;  // padStatus() 用に最後に見えたパッドの ID を覚える
 namespace {
 // ブラウザの Gamepad API は 0 が離した状態、1 が押し込み。古いパッドは -1..1 で、離すと -1。
 float triggerLevel(float value) {
@@ -175,6 +197,9 @@ PadPulse readBrowserPad(DriveInput& input) {
         auto held = [&](int index) {
             return index < pad.numButtons && pad.digitalButton[index];
         };
+        if (gLastPadId.empty() && pad.id[0]) {
+            gLastPadId = pad.id;  // 認識確認用に最初の 1 台を覚える
+        }
         const bool standard = std::strcmp(pad.mapping, "standard") == 0 || (pad.numButtons >= 16 && pad.numAxes >= 2);
         input.steer += stickDead(axis(0));
         if (standard) {

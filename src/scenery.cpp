@@ -15,24 +15,30 @@ unsigned treeHash(int index, float side) {
 
 }  // namespace
 
-void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const {
+void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
+    (void)groundY;  // 木は幹が細く接地が目立たないので基礎は付けない
     const Vec3 trunk{0.32f, 0.2f, 0.12f};
     const Vec3 leafA{0.10f, 0.34f, 0.12f};
     const Vec3 leafB{0.13f, 0.42f, 0.15f};
+    // 個体差: 背の高さ (hMul) と樹冠の広がり (cMul) を別々に振る。
+    // 全体スケールだけだと「同じ形の大小」にしかならず、並んだときに
+    // コピペ感が出るため、縦横比も変えてシルエットをばらけさせる。
+    const float hMul = 0.8f + hash01(seed ^ 0x33u) * 0.7f;   // 0.8〜1.5
+    const float cMul = 0.85f + hash01(seed ^ 0x44u) * 0.5f;  // 0.85〜1.35
     const float w = 0.16f * scale;
-    const float trunkH = 1.6f * scale;
+    const float trunkH = 1.6f * scale * hMul;
     mesh.addBox({base.x - w, base.y, base.z - w},
                 {base.x + w, base.y + trunkH, base.z + w}, trunk);
-    const float r1 = 1.05f * scale;
-    const float r2 = 0.72f * scale;
+    const float r1 = 1.05f * scale * cMul;
+    const float r2 = 0.72f * scale * cMul;
     const float lean = (hash01(seed ^ 0x51u) - 0.5f) * 0.5f * scale;
     mesh.addBox({base.x - r1, base.y + trunkH, base.z - r1},
-                {base.x + r1, base.y + trunkH + 1.9f * scale, base.z + r1}, leafA);
-    mesh.addBox({base.x + lean - r2, base.y + trunkH + 1.5f * scale, base.z - r2},
-                {base.x + lean + r2, base.y + trunkH + 3.1f * scale, base.z + r2}, leafB);
+                {base.x + r1, base.y + trunkH + 1.9f * scale * hMul, base.z + r1}, leafA);
+    mesh.addBox({base.x + lean - r2, base.y + trunkH + 1.5f * scale * hMul, base.z - r2},
+                {base.x + lean + r2, base.y + trunkH + 3.1f * scale * hMul, base.z + r2}, leafB);
 }
 
-void BuildingObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const {
+void BuildingObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
     // 静かな色の箱ビル。本体 + 少し大きい屋根キャップの 2 段構成。
     static const Vec3 palette[4] = {
         {0.62f, 0.64f, 0.66f},  // 白グレー
@@ -48,6 +54,14 @@ void BuildingObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed)
     mesh.addBox({base.x - w, base.y, base.z - d}, {base.x + w, base.y + h, base.z + d}, body);
     mesh.addBox({base.x - w - 0.3f, base.y + h, base.z - d - 0.3f},
                 {base.x + w + 0.3f, base.y + h + 0.5f, base.z + d + 0.3f}, roof);
+    // 基礎: 建物の底面は平らなので、地面まで届く土台がないと坂の上で
+    // 空中に浮いて見える。フットプリントより少し大きいコンクリートの
+    // 箱を地面 (groundY) まで伸ばし、上端を床として見せる。
+    if (groundY < base.y - 0.05f) {
+        const Vec3 concrete{0.48f, 0.47f, 0.44f};
+        mesh.addBox({base.x - w - 0.5f, groundY, base.z - d - 0.5f},
+                    {base.x + w + 0.5f, base.y + 0.12f, base.z + d + 0.5f}, concrete);
+    }
 }
 
 Vec3 SceneryBuilder::rightAt(int index) const {
@@ -125,6 +139,13 @@ void SceneryBuilder::buildGuardrails(CpuMesh& mesh, int from, int to) const {
 
 std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
     const int n = int(track_.samples.size());
+    // 背景の地面（一枚板）の高さ。buildBackdrop と同じ基準 (最低標高 - 4m)
+    // より 1m 下まで基礎を伸ばせば、どこから見ても必ず地面に届く。
+    float minY = 1e9f;
+    for (const TrackSample& s : track_.samples) {
+        minY = std::min(minY, s.y);
+    }
+    const float groundY = minY - 5.0f;
     const int chunkCount = (n + samplesPerChunk - 1) / samplesPerChunk;
     std::vector<SceneryChunk> chunks;
     chunks.resize(size_t(chunkCount));
@@ -145,8 +166,9 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = baseY;
                 if (clearOfOtherRoad(pos, 6.0f, baseY, i)) {
-                    const float scale = 0.85f + float((h >> 16) % 100u) / 100.0f * 0.7f;
-                    tree.build(mesh, pos, scale, h);
+                    // 大きさは 0.6〜2.1 倍まで大きく振る（形の個体差は TreeObject 側）。
+                    const float scale = 0.6f + float((h >> 16) % 100u) / 100.0f * 1.5f;
+                    tree.build(mesh, pos, scale, h, groundY);
                 }
             }
             // 建物: 約 110m 間隔の候補から 6 割、芝の外 20〜50m
@@ -155,7 +177,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = baseY;
                 if (clearOfOtherRoad(pos, 17.0f, baseY, i)) {
-                    building.build(mesh, pos, 1.0f, h ^ 0x77u);
+                    building.build(mesh, pos, 1.0f, h ^ 0x77u, groundY);
                 }
             }
             // 住宅街: 約 180m 間隔の候補に、5〜9軒の小さな集落を作る。
@@ -168,7 +190,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                     unsigned hh = treeHash(i * 31 + u * 7, side);
                     Vec3 hp{cpos.x + (float((hh >> 8) % 1000u) / 1000.0f - 0.5f) * 46.0f, cbaseY - 0.3f,
                             cpos.z + (float((hh >> 18) % 1000u) / 1000.0f - 0.5f) * 46.0f};
-                    if (clearOfOtherRoad(hp, 12.0f, cbaseY, i)) house.build(mesh, hp, 1.0f, hh);
+                    if (clearOfOtherRoad(hp, 12.0f, cbaseY, i)) house.build(mesh, hp, 1.0f, hh, groundY);
                 }
             }
         }
@@ -183,7 +205,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
     return chunks;
 }
 
-void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const {
+void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
     static const Vec3 wallPalette[4] = {
         {0.82f, 0.80f, 0.76f}, {0.78f, 0.72f, 0.64f},
         {0.72f, 0.76f, 0.78f}, {0.84f, 0.78f, 0.70f}};
@@ -206,6 +228,14 @@ void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) co
     mesh.addQuad(e2, e3, r0, r1, {0, 0.5f, 1}, roof);
     mesh.addTriangle(e1, e2, r1, {1, 0, 0}, wall);
     mesh.addTriangle(e3, e0, r0, {-1, 0, 0}, wall);
+    // 基礎と床: 住宅街は一軒ごとに地形の高さが違うため、土台なしだと
+    // 集落ごと空中に浮く。石積み調の基礎を地面 (groundY) まで伸ばし、
+    // 上端の張り出しを「床」として見せる（擁壁のある山側の住宅の見た目）。
+    if (groundY < base.y - 0.05f) {
+        const Vec3 stone{0.44f, 0.41f, 0.36f};
+        mesh.addBox({base.x - w - 0.5f, groundY, base.z - d - 0.5f},
+                    {base.x + w + 0.5f, base.y + 0.10f, base.z + d + 0.5f}, stone);
+    }
 }
 
 // コースを囲む山並み。中心から見た稜線をギザギザの帯で作る。

@@ -6,11 +6,13 @@
 #include <vector>
 
 // 路傍オブジェクト（木・建物など）の基底クラス。
-// base は接地位置、scale は大きさ、seed はバリエーション決定用のハッシュ。
+// base は接地位置、scale は大きさ、seed はバリエーション決定用のハッシュ、
+// groundY は背景の地面（一枚板）の高さ。建物・家は groundY まで届く基礎を
+// 付けて、坂の上に置いても空中に浮いて見えないようにする。
 class SceneryObject {
 public:
     virtual ~SceneryObject() = default;
-    virtual void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const = 0;
+    virtual void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const = 0;
 
 protected:
     static float hash01(unsigned h) {
@@ -23,18 +25,18 @@ protected:
 
 class TreeObject : public SceneryObject {
 public:
-    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const override;
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
 };
 
 class BuildingObject : public SceneryObject {
 public:
-    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const override;
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
 };
 
 // 住宅（壁 + 切妻屋根）。住宅街はこれをまとめて配置する。
 class HouseObject : public SceneryObject {
 public:
-    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed) const override;
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
 };
 
 // 景観メッシュのひとかたまり（チャンク）。中心は描画カリング用。

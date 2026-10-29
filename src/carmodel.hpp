@@ -9,9 +9,7 @@
 #include "geom.hpp"
 #include "meshbuild.hpp"
 
-struct Game;
-
 void buildCarNose(CpuMesh& mesh);
 void buildTailLamps(CpuMesh& mesh, Vec3 color);
-// 車種を切り替える（性能倍率＋ドリフト調整値の差し替えと保存）。
-void applyCarSpec(Game& app, int index);
+// 車種の切り替え (applyCarSpec) は Game のメソッドへ移設した。
+// ここは形状の構築だけを担当する。

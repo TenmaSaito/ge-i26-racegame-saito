@@ -69,6 +69,7 @@ namespace {
 // この層が所有する実物。Game はウィンドウや GL を知らない。
 SDL_Window* gWindow = nullptr;
 SDL_GLContext gGl = nullptr;
+IRenderer* gRenderer = nullptr;  // Game へ差し込んだ描画実装 (所有はこの層)
 
 }  // namespace
 
@@ -208,7 +209,7 @@ bool createWindow(Game& app) {
 #endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    gWindow = SDL_CreateWindow(app.title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+    gWindow = SDL_CreateWindow(app.title().c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     if (!gWindow) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
@@ -221,26 +222,29 @@ bool createWindow(Game& app) {
     }
     SDL_GL_SetSwapInterval(1);
     // 描画実装を生成して Game へ差し込む (内側は IRenderer だけを見る)。
-    app.renderer = createRenderer();
-    if (!app.renderer || !app.renderer->init()) {
+    // 実物の所有はこの層が持ち、destroyWindow で破棄する。
+    gRenderer = createRenderer();
+    app.installRenderer(gRenderer);
+    if (!gRenderer || !gRenderer->init()) {
         SDL_Log("GL init failed");
         return false;
     }
     // 入力アダプタへウィンドウを引き渡す (パッドの所有も入力側)。
     input::attachWindow(gWindow);
     // Game の差し込み口に、この層の実装を登録する。
-    app.debugSink = [](const char* text) { sendDebugText(text); };
-    app.saveTuningText = [](const std::string& text) {
+    app.setDebugSink([](const char* text) { sendDebugText(text); });
+    app.setSaveTuningSink([](const std::string& text) {
         saveSetting(kTuningStorageKey, text);
-    };
+    });
     return true;
 }
 
 void destroyWindow(Game& app) {
     input::detach();
-    if (app.renderer) {
-        destroyRenderer(app.renderer);
-        app.renderer = nullptr;
+    if (gRenderer) {
+        destroyRenderer(gRenderer);
+        gRenderer = nullptr;
+        app.installRenderer(nullptr);
     }
     Mix_CloseAudio();
     Mix_Quit();
@@ -300,10 +304,10 @@ void frameOnce(Game& app) {
     int drawableW = 0;
     int drawableH = 0;
     SDL_GL_GetDrawableSize(gWindow, &drawableW, &drawableH);
-    if (app.renderer) {
-        app.renderer->resize(drawableW, drawableH);
+    if (IRenderer* renderer = app.renderer()) {
+        renderer->resize(drawableW, drawableH);
     }
-    gameFrame(app, dt);
+    app.frame(dt);
     SDL_GL_SwapWindow(gWindow);
 }
 
@@ -317,7 +321,7 @@ void runMainLoop(Game& app) {
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop_arg(loopCallback, &app, 0, 1);
 #else
-    while (app.running) {
+    while (app.running()) {
         Uint64 frameStart = SDL_GetPerformanceCounter();
         frameOnce(app);
         double frameMs = double(SDL_GetPerformanceCounter() - frameStart) /

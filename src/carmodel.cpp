@@ -1,14 +1,11 @@
 // ============================================================================
-// carmodel.cpp ― 車体モデル（追加形状と車種）
-// 役割: ノーズやテールランプなど車体の追加形状の構築と、
-//       車種切替（性能倍率とドリフト調整値の適用）。
+// carmodel.cpp ― 車体モデル（追加形状）
+// 役割: ノーズやテールランプなど、車体の追加形状の構築だけを担当する。
+//       車種切替は Game::applyCarSpec の仕事。
 // ============================================================================
 
 #include "carmodel.hpp"
 
-#include "car.hpp"     // kCarSpecs, driftTuning
-#include "game.hpp"
-#include "tuning.hpp"  // clampTuning, serializeTuning
 
 void buildCarNose(CpuMesh& mesh) {
     const Vec3 red{0.72f, 0.08f, 0.09f};
@@ -25,18 +22,4 @@ void buildTailLamps(CpuMesh& mesh, Vec3 color) {
     }
 }
 
-// 車種を適用する。特性の倍率と、その車の基準チューニングに切り替える。
-void applyCarSpec(Game& app, int index) {
-    app.carSpec = index;
-    const CarSpec& spec = kCarSpecs[index];
-    app.car.powerMul = spec.powerMul;
-    app.car.topSpeedMul = spec.topSpeedMul;
-    app.car.steerMul = spec.steerMul;
-    driftTuning = spec.tuning;
-    clampTuning();
-    // 保存は Game の差し込み口経由 (実務は外側)。この層は保存先を知らない。
-    if (app.saveTuningText) {
-        app.saveTuningText(serializeTuning());
-    }
-}
 
