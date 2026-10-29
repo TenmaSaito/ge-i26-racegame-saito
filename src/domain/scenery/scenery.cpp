@@ -348,45 +348,43 @@ float SceneryBuilder::terrainHeightAt(float x, float z) const {
 }
 
 CpuMesh SceneryBuilder::buildBackdrop() const {
+    // 地形は「コースに沿う帯」ではなく、ワールド全体の高度場グリッドで作る。
+    // 帯方式だと、別の区間へ伸びた帯がコースの手前で交差し、頂点間の補間で
+    // 巨大な三角形が路面を切り裂いてしまう (実際に埋まった)。高度場なら
+    // どの (x, z) でも高さは地形関数の値そのものになり、路面を突かない。
     CpuMesh mesh;
-    const int n = int(track_.samples.size());
-    // 横方向の列 (中心線からの距離)。平らな帯 → 丘の帯 → 遠景。
-    const float start = track_.halfWidth + 0.5f;
-    const float lats[] = {start, 40.0f, 90.0f, 150.0f, 230.0f, 340.0f,
-                          520.0f, 780.0f, 1150.0f, 1600.0f};
-    const int cols = int(sizeof(lats) / sizeof(lats[0]));
-    const int step = 2;  // サンプルを 1 つ飛ばしで使う (頂点数を抑える)
-    const int rows = (n + step - 1) / step;
-    // まず位置と高さだけを格子状に用意する (法線は格子の差分から作るので、
-    // 高さ関数の呼び出しは頂点あたり 1 回で済む)。
-    std::vector<Vec3> pos(size_t(rows) * 2 * size_t(cols));
-    auto cell = [&](int r, int side, int cix) -> Vec3& {
-        return pos[(size_t(r) * 2 + size_t(side)) * size_t(cols) + size_t(cix)];
-    };
-    for (int r = 0; r < rows; ++r) {
-        const int i = std::min(r * step, n - 1);
-        for (int s = 0; s < 2; ++s) {
-            const float side = s == 0 ? -1.0f : 1.0f;
-            for (int cix = 0; cix < cols; ++cix) {
-                Vec3 p = pointAt(i, side * lats[cix]);
-                p.y = terrainHeightAt(p.x, p.z);
-                cell(r, s, cix) = p;
+    float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+    for (const TrackSample& s : track_.samples) {
+        minX = std::min(minX, s.x); maxX = std::max(maxX, s.x);
+        minZ = std::min(minZ, s.z); maxZ = std::max(maxZ, s.z);
+    }
+    // 格子 1 枚を焼く共通処理。法線は格子の差分から作る (滑らかな陰影)。
+    auto buildGrid = [&](float x0, float z0, float x1, float z1, float cell, float sink) {
+        const int nx = int((x1 - x0) / cell) + 1;
+        const int nz = int((z1 - z0) / cell) + 1;
+        std::vector<Vec3> pos(size_t(nx) * size_t(nz));
+        for (int j = 0; j < nz; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                Vec3 p{x0 + cell * float(i), 0.0f, z0 + cell * float(j)};
+                p.y = terrainHeightAt(p.x, p.z) + sink;
+                // 路面のすぐ脇では少しだけ窪ませ、芝や路盤の下に隠す
+                // (バンクで縁が下がる側でも地形が顔を出さないため)。
+                TrackPose q = track_.query(p.x, p.z, p.y, -1.0f);
+                if (q.found && std::fabs(q.lateral) < 45.0f) {
+                    p.y -= 0.30f * (1.0f - std::fabs(q.lateral) / 45.0f);
+                }
+                pos[size_t(j) * size_t(nx) + size_t(i)] = p;
             }
         }
-    }
-    std::vector<std::uint32_t> grid(pos.size());
-    for (int r = 0; r < rows; ++r) {
-        const int rp = (r + rows - 1) % rows;
-        const int rn = (r + 1) % rows;
-        for (int s = 0; s < 2; ++s) {
-            for (int cix = 0; cix < cols; ++cix) {
-                const int cp = cix > 0 ? cix - 1 : cix;
-                const int cn = cix + 1 < cols ? cix + 1 : cix;
-                Vec3 p = cell(r, s, cix);
-                // 接線 2 本の外積が法線。頂点法線なので坂は滑らかに陰影する。
-                Vec3 along = cell(rn, s, cix) - cell(rp, s, cix);
-                Vec3 across = cell(r, s, cn) - cell(r, s, cp);
-                Vec3 normal = cross(across, along);
+        const std::uint32_t base = uint32_t(mesh.vertices.size() / 9);
+        for (int j = 0; j < nz; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                Vec3 p = pos[size_t(j) * size_t(nx) + size_t(i)];
+                const int ip = i > 0 ? i - 1 : i, in = i + 1 < nx ? i + 1 : i;
+                const int jp = j > 0 ? j - 1 : j, jn = j + 1 < nz ? j + 1 : j;
+                Vec3 along = pos[size_t(jn) * size_t(nx) + size_t(i)] - pos[size_t(jp) * size_t(nx) + size_t(i)];
+                Vec3 across = pos[size_t(j) * size_t(nx) + size_t(in)] - pos[size_t(j) * size_t(nx) + size_t(ip)];
+                Vec3 normal = cross(along, across);
                 if (normal.y < 0.0f) {
                     normal = normal * -1.0f;
                 }
@@ -409,33 +407,25 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
                     float snow = std::min(1.0f, (relief - 95.0f) / 40.0f);
                     col = col * (1.0f - snow) + Vec3{0.87f, 0.89f, 0.93f} * snow;
                 }
-                unsigned jh = treeHash(r * 3 + cix, s == 0 ? -1.0f : 1.0f);
+                unsigned jh = treeHash(i * 3 + j, 1.0f);
                 float jitter = 0.96f + float((jh >> 12) % 100u) / 100.0f * 0.08f;
-                grid[(size_t(r) * 2 + size_t(s)) * size_t(cols) + size_t(cix)] =
-                    uint32_t(mesh.vertices.size() / 9);
                 mesh.addVertex(p, normal, col * jitter);
             }
         }
-    }
-    auto idx = [&](int r, int side, int cix) {
-        return grid[(size_t(r) * 2 + size_t(side)) * size_t(cols) + size_t(cix)];
-    };
-    for (int r = 0; r < rows; ++r) {
-        const int r2 = (r + 1) % rows;
-        for (int side = 0; side < 2; ++side) {
-            for (int cix = 0; cix + 1 < cols; ++cix) {
-                std::uint32_t a = idx(r, side, cix), b = idx(r, side, cix + 1);
-                std::uint32_t cc = idx(r2, side, cix + 1), d = idx(r2, side, cix);
-                if (side == 0) {
-                    mesh.addRawTriangle(a, b, cc);
-                    mesh.addRawTriangle(a, cc, d);
-                } else {
-                    mesh.addRawTriangle(a, cc, b);
-                    mesh.addRawTriangle(a, d, cc);
-                }
+        for (int j = 0; j + 1 < nz; ++j) {
+            for (int i = 0; i + 1 < nx; ++i) {
+                std::uint32_t a = base + uint32_t(size_t(j) * size_t(nx) + size_t(i));
+                std::uint32_t b = a + 1;
+                std::uint32_t d = base + uint32_t(size_t(j + 1) * size_t(nx) + size_t(i));
+                std::uint32_t cc = d + 1;
+                mesh.addRawTriangle(a, d, cc);
+                mesh.addRawTriangle(a, cc, b);
             }
         }
-    }
+    };
+    // 内側: 細かい格子 (16m)。外側: 粗い格子 (80m) を少し沈めて重ねる。
+    buildGrid(minX - 260.0f, minZ - 260.0f, maxX + 260.0f, maxZ + 260.0f, 16.0f, 0.0f);
+    buildGrid(minX - 1500.0f, minZ - 1500.0f, maxX + 1500.0f, maxZ + 1500.0f, 80.0f, -0.6f);
     return mesh;
 }
 

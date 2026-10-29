@@ -215,7 +215,7 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         SceneryBuilder builder(track);
         CpuMesh terrain = builder.buildBackdrop();
         std::printf("self-test terrain tris %d\n", int(terrain.indices.size() / 3));
-        if (terrain.indices.size() < 3000) return 15;
+        if (terrain.indices.size() < 30000) return 15;  // 高度場グリッド一式
         const TrackSample& s0 = track.samples[100];
         TrackPose g0 = track.query(s0.x, s0.z, s0.y);
         float near = builder.terrainHeightAt(s0.x, s0.z);
