@@ -83,6 +83,19 @@ void attachWindow(SDL_Window* window) {
 
 // パッドの認識状態。ネイティブは SDL が掴んだ名前、ブラウザ版は
 // Gamepad API で最後に見えたパッドの ID を返す。
+void rumble(float low, float high, int durationMs) {
+    if (!gPad) {
+        return;  // パッドが無ければ何もしない
+    }
+    // SDL の振動は 16bit 指定。対応していないパッド/環境では -1 が返る
+    // だけで害はない (ブラウザ版は Gamepad API の振動に橋渡しされる)。
+    auto to16 = [](float v) {
+        v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+        return Uint16(v * 65535.0f);
+    };
+    SDL_GameControllerRumble(gPad, to16(low), to16(high), Uint32(durationMs < 0 ? 0 : durationMs));
+}
+
 std::string padStatus() {
 #ifndef __EMSCRIPTEN__
     if (gPad) {

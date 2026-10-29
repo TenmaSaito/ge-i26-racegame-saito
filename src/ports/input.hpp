@@ -57,6 +57,11 @@ UiActions pollUi(bool tuningOpen);
 // 現在の物理入力状態から運転入力を組み立てる (パッドのトリガは pulse へ)。
 DriveInput sampleDrive(PadPulse& pulse, bool carDrifting);
 
+// コントローラーの振動 (ランブル)。low は低周波 (重い振動)、high は
+// 高周波 (細かい振動) の強さ 0..1、durationMs は鳴らす長さ。
+// パッドが無い・未対応の環境では何もしない (安全に呼べる)。
+void rumble(float low, float high, int durationMs);
+
 // 接続中のパッド名 (デバッグ表示用)。無ければ "NONE" 始まりの案内文。
 // ブラウザ版はボタンを押すまでパッドが見えない仕様なので、その旨も返す。
 std::string padStatus();

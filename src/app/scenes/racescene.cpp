@@ -173,6 +173,57 @@ void RaceScene::frame(double dtSeconds) {
         }
     }
 
+    // --- 振動: パッドへの触覚フィードバック ---------------------------------
+    // 継続もの (ドリフト・芝・壁擦り) は約 70ms ごとに短く送り直し、
+    // 単発もの (壁ヒット・カウント・GO) は起きた瞬間に強く叩く。
+    {
+        auto pulse = [](float low, float high, int ms) { input::rumble(low, high, ms); };
+        if (app.paused() && !wasPaused_) {
+            pulse(0.0f, 0.0f, 1);  // ポーズに入ったら振動を止める
+        }
+        wasPaused_ = app.paused();
+        if (!app.paused()) {
+            // カウントの数字が変わるたびに小刻みに、GO で強く。
+            int num = app.race().counting()
+                          ? int(std::ceil(app.race().countdownLeft() / Race::kCountdownSlot))
+                          : 0;
+            if (num != prevCountNum_ && num > 0) {
+                pulse(0.25f, 0.15f, 70);
+            }
+            prevCountNum_ = num;
+            if (wasCounting_ && !app.race().counting()) {
+                bool rocket = app.race().launchBoost() > 0;
+                pulse(rocket ? 0.95f : 0.75f, rocket ? 0.6f : 0.45f, rocket ? 320 : 240);
+            }
+            wasCounting_ = app.race().counting();
+            // 壁ヒット: 衝突が強まった瞬間にだけ叩く (擦りは継続側で扱う)。
+            if (car.wallImpact > 0.05f && car.wallImpact > prevWallImpact_ + 0.03f) {
+                pulse(0.5f + car.wallImpact * 0.5f, 0.35f + car.wallImpact * 0.45f,
+                      int(130.0f + car.wallImpact * 130.0f));
+                rumbleTimer_ = 0.05f;
+            }
+            prevWallImpact_ = car.wallImpact;
+            // 継続振動: 候補の中で一番強いものを採用する。
+            float low = 0.0f, high = 0.0f;
+            if (car.wallContact && std::fabs(car.speed) > 5.0f) {
+                low = 0.5f; high = 0.35f;  // 壁擦り: ゴリゴリした重い振動
+            }
+            if (car.drifting && car.driftAmount > 0.15f) {
+                low = std::max(low, 0.28f + car.driftAmount * 0.45f);
+                high = std::max(high, 0.18f + car.driftAmount * 0.35f);
+            } else if (!car.onAsphalt && std::fabs(car.speed) > 8.0f) {
+                low = std::max(low, 0.22f); high = std::max(high, 0.10f);  // 芝: 軽い凸凹
+            }
+            rumbleTimer_ -= float(elapsed);
+            if (rumbleTimer_ <= 0.0f) {
+                if (low > 0.0f || high > 0.0f) {
+                    pulse(low, high, 110);
+                }
+                rumbleTimer_ = 0.07f;
+            }
+        }
+    }
+
     // --- ゴール判定: 規定周回を完了したらリザルトへ -------------------------
     if (app.race().completed() >= kRaceLaps) {
         app.requestScene(SceneId::Result);

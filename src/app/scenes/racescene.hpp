@@ -34,4 +34,11 @@ private:
     // ゴースト記録の状態管理用 (ラップ開始と完了の検出)。
     bool wasTiming_ = false;   // 前ステップで計測中だったか
     int prevCompleted_ = 0;    // 前ステップの完了周回数
+
+    // コントローラー振動の状態 (パルス発火のエッジ検出と送信間引き)。
+    float rumbleTimer_ = 0;     // 継続振動の再送までの残り秒
+    float prevWallImpact_ = 0;  // 前フレームの壁衝突の強さ
+    bool wasCounting_ = false;  // 前フレームがカウント中だったか
+    int prevCountNum_ = 0;      // 前フレームのカウント数字
+    bool wasPaused_ = false;    // 前フレームがポーズ中だったか
 };
