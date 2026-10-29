@@ -55,9 +55,29 @@
   }
   .howto b { color: #bfe9ff; }
   a { color: #9fdcff; }
+  /* サイト共通の外枠バー (AQUART の各サブページへのジャンプ用) */
+  .frame-bar{
+    width:100%; display:flex; justify-content:space-between; align-items:center;
+    padding:10px 20px; background:rgba(4,30,44,.88); border-bottom:1px solid rgba(255,255,255,.14);
+  }
+  .frame-bar .logo{color:#eaf6ff; text-decoration:none; font-weight:800; letter-spacing:.14em; font-size:17px}
+  .frame-bar .logo small{display:block; font-size:9px; letter-spacing:.3em; opacity:.65; font-weight:600}
+  .frame-bar nav{display:flex; gap:18px; align-items:center}
+  .frame-bar nav a{color:#cfeeff; text-decoration:none; font-size:12.5px; font-weight:700; letter-spacing:.14em}
+  .frame-bar nav a:hover{color:#fff}
+  .frame-bar nav .current{color:#7fd4ff; font-size:12.5px; font-weight:700; letter-spacing:.14em}
 </style>
 </head>
 <body>
+  <!-- 外枠バー：AQUART の入口・ポートフォリオへ戻れる共通枠 -->
+  <header class="frame-bar">
+    <a class="logo" href="../">AQUART<small>SAITO TENMA</small></a>
+    <nav>
+      <a href="../">TOP</a>
+      <a href="../portfolio/">PORTFOLIO</a>
+      <span class="current">RACE GAME</span>
+    </nav>
+  </header>
 <header>
   <h1>ドリフトレース（仮）</h1>
   <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
