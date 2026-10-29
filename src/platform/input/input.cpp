@@ -30,6 +30,11 @@ namespace {
 SDL_Window* gWindow = nullptr;
 SDL_GameController* gPad = nullptr;
 
+// ベンチ用の差し込み入力 (通常は nullptr)。
+const UiActions* gBenchUi = nullptr;
+const DriveInput* gBenchDrive = nullptr;
+
+
 void openPad() {
 #ifdef __EMSCRIPTEN__
     // ブラウザのパッドは Gamepad API 側で読む。SDL で開くと入力が二重になる。
@@ -83,6 +88,9 @@ void attachWindow(SDL_Window* window) {
 
 // パッドの認識状態。ネイティブは SDL が掴んだ名前、ブラウザ版は
 // Gamepad API で最後に見えたパッドの ID を返す。
+void setBenchUi(const UiActions* actions) { gBenchUi = actions; }
+void setBenchDrive(const DriveInput* input) { gBenchDrive = input; }
+
 void rumble(float low, float high, int durationMs) {
     if (!gPad) {
         return;  // パッドが無ければ何もしない
@@ -187,6 +195,9 @@ UiActions pollUi(bool tuningOpen) {
         } else if (event.type == SDL_MOUSEBUTTONDOWN) {
             ui.click = true;  // 決定とは分ける (フォーカス取りのクリックで誤爆しないため)
         }
+    }
+    if (gBenchUi) {
+        return *gBenchUi;  // ベンチ差し込み中は実入力の代わりに返す
     }
     return ui;
 }
@@ -376,6 +387,9 @@ DriveInput sampleDrive(PadPulse& pulse, bool carDrifting) {
     input.brake = clampf(input.brake, 0, 1);
     input.steer = clampf(input.steer, -1, 1);
     input.driftSteer = clampf(input.driftSteer, -1, 1);
+    if (gBenchDrive) {
+        return *gBenchDrive;  // ベンチ差し込み中は実入力の代わりに返す
+    }
     return input;
 }
 

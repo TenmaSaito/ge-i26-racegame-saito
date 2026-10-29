@@ -6,6 +6,7 @@
 //       触らず、platform 層の差し替えで対応する。
 // ============================================================================
 
+#include "bench.hpp"
 #include "game.hpp"
 #include "platform.hpp"
 #include "selftest.hpp"
@@ -56,9 +57,12 @@ std::string pickTrackStem(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     bool test = false;
+    const char* benchMode = nullptr;  // --bench <full|nofx|noscene>
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--self-test") == 0) {
             test = true;
+        } else if (std::strcmp(argv[i], "--bench") == 0 && i + 1 < argc) {
+            benchMode = argv[i + 1];
         }
     }
     std::string stem = pickTrackStem(argc, argv);
@@ -95,6 +99,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     app.init();
+    if (benchMode) {
+        int rc = runBenchmark(app, benchMode);
+        platform::destroyWindow(app);
+        return rc;
+    }
     platform::runMainLoop(app);
     platform::destroyWindow(app);  // 終了処理はすべて外側 (platform) の担当
     return 0;

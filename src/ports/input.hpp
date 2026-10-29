@@ -54,6 +54,10 @@ void detach();
 // フルスクリーン切替 (F キー) は表示系の操作なので、この層がそのまま実行する。
 // tuningOpen の間は矢印キーを調整の意図として返す。
 UiActions pollUi(bool tuningOpen);
+// ベンチマーク用: 外から入力を差し込む (nullptr で実入力に戻る)。
+// 差し込み中もイベント消化は通常どおり行い、戻り値だけ差し替える。
+void setBenchUi(const UiActions* actions);
+void setBenchDrive(const DriveInput* input);
 // 現在の物理入力状態から運転入力を組み立てる (パッドのトリガは pulse へ)。
 DriveInput sampleDrive(PadPulse& pulse, bool carDrifting);
 

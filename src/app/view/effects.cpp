@@ -33,6 +33,9 @@ void Effects::clear() {
 }
 
 void Effects::update(const Car& car, float dt) {
+    if (!enabled_) {
+        return;  // ベンチで無効化されている間は生成も経過も止める
+    }
     // --- タイヤ煙: 既存の粒を漂わせ、寿命が来たものを消す -----------------
     for (SmokePuff& p : smoke_) {
         p.age += dt;
@@ -195,6 +198,9 @@ Vec3 Effects::lampWorldPos(const Car& car, float side) const {
 // 煙をカメラ向きの円盤として描く（八角形のビルボードを毎フレーム構築）。
 
 void Effects::drawSmoke(IRenderer& renderer, const Orbit& camera) const {
+    if (!enabled_) {
+        return;
+    }
     if (smoke_.empty()) {
         return;
     }
@@ -259,6 +265,9 @@ static void appendTrailRibbon(CpuMesh& mesh, const std::vector<TrailPoint>& pts,
 
 // プレイヤーの光跡。
 void Effects::drawTrails(IRenderer& renderer) const {
+    if (!enabled_) {
+        return;
+    }
     CpuMesh mesh;
     appendTrailRibbon(mesh, trailL_, Vec3{1.9f, 0.16f, 0.16f});
     appendTrailRibbon(mesh, trailR_, Vec3{1.9f, 0.16f, 0.16f});
@@ -268,6 +277,9 @@ void Effects::drawTrails(IRenderer& renderer) const {
 // ゴーストの残像。本体が半透明なので、帯の色も少し落として判別しやすくする。
 void Effects::drawGhostTrails(IRenderer& renderer, const std::vector<TrailPoint>& left,
                               const std::vector<TrailPoint>& right) const {
+    if (!enabled_) {
+        return;
+    }
     CpuMesh mesh;
     appendTrailRibbon(mesh, left, Vec3{1.15f, 0.30f, 0.30f});
     appendTrailRibbon(mesh, right, Vec3{1.15f, 0.30f, 0.30f});
@@ -279,6 +291,9 @@ void Effects::drawGhostTrails(IRenderer& renderer, const std::vector<TrailPoint>
 // メッシュはキャッシュし、痕が増減した時と約 0.15 秒ごとのフェード
 // 更新のときだけ作り直す (毎フレーム全区間の再構築が重かったため)。
 void Effects::drawMarks(IRenderer& renderer) const {
+    if (!enabled_) {
+        return;
+    }
     if (marks_.empty()) {
         return;
     }
@@ -315,6 +330,9 @@ void Effects::drawMarks(IRenderer& renderer) const {
 // 火花を描く。カメラ向きの小さな四角を、熱い橙 (HDR) から暗い赤へ
 // 冷ましながら出す。加算っぽく見えるよう色は明るめに振る。
 void Effects::drawSparks(IRenderer& renderer, const Orbit& camera) const {
+    if (!enabled_) {
+        return;
+    }
     if (sparks_.empty()) {
         return;
     }

@@ -43,6 +43,7 @@ add_executable(racegame
     src/platform/audio/audio.cpp
     src/platform/input/input.cpp
     src/platform/test/selftest.cpp
+    src/platform/test/bench.cpp
     src/app/core/game.cpp
     src/app/core/object.cpp
     src/app/scenes/titlescene.cpp

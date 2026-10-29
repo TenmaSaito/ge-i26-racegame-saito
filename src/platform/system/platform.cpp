@@ -296,6 +296,16 @@ void destroyWindow(Game& app) {
     SDL_Quit();
 }
 
+// フレームレート上限 (60fps)。表示が速すぎると物理 (60Hz 固定) との
+// 位相がずれ続けてカクついて見えるため、描画を 60 回/秒に絞る。
+// ブラウザ版は「まだ早い」フレームを間引いて rAF に任せ、ネイティブは
+// 短く眠ってから進める。長い停止の後は予定を組み直して暴走を防ぐ。
+bool gFrameCapEnabled = true;   // 上限の有効/無効 (ベンチでは切る)
+Uint64 gNextDue = 0;            // 次に描いてよい時刻 (性能カウンタ)
+Uint64 gLastExec = 0;           // 最後に実際に描いた時刻 (dt の基準)
+
+void setFrameCapEnabled(bool enabled) { gFrameCapEnabled = enabled; }
+
 namespace {
 
 // ブラウザ版のみ: 外部ツール (Chrome 拡張など) が保存値を書き換えたら
@@ -327,13 +337,34 @@ void pollExternalTuningChange() {
 }
 
 // 1 フレーム分の外側の仕事: 時間を測る → サイズを反映 → 内側を進める → 表示。
+// 上限に引っかかったフレーム (ブラウザ版) は何もせずに戻る。
 void frameOnce(Game& app) {
-    static Uint64 lastCounter = 0;
     Uint64 now = SDL_GetPerformanceCounter();
-    double dt = lastCounter == 0
-                    ? 0.0
-                    : double(now - lastCounter) / double(SDL_GetPerformanceFrequency());
-    lastCounter = now;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+    if (gFrameCapEnabled) {
+        const Uint64 budget = freq / 60;  // 1 フレームの持ち時間
+        if (gNextDue != 0 && now < gNextDue) {
+#ifdef __EMSCRIPTEN__
+            return;  // ブラウザ版は間引く (次の rAF でまた呼ばれる)
+#else
+            double waitMs = double(gNextDue - now) / double(freq) * 1000.0;
+            if (waitMs > 0.6) {
+                SDL_Delay(static_cast<Uint32>(waitMs - 0.5));  // ネイティブは眠る
+            }
+            now = SDL_GetPerformanceCounter();
+            if (now < gNextDue) {
+                return;  // それでも早ければ間引く (呼び出し側が回し続ける)
+            }
+#endif
+        }
+        if (gNextDue == 0 || now > gNextDue + budget) {
+            gNextDue = now + budget;  // 初回・長い停止明けは組み直す
+        } else {
+            gNextDue += budget;       // 一定の刻みを保つ
+        }
+    }
+    double dt = gLastExec == 0 ? 0.0 : double(now - gLastExec) / double(freq);
+    gLastExec = now;
 
     pollExternalTuningChange();
 
@@ -358,15 +389,24 @@ void runMainLoop(Game& app) {
     emscripten_set_main_loop_arg(loopCallback, &app, 0, 1);
 #else
     while (app.running()) {
-        Uint64 frameStart = SDL_GetPerformanceCounter();
-        frameOnce(app);
-        double frameMs = double(SDL_GetPerformanceCounter() - frameStart) /
-                         double(SDL_GetPerformanceFrequency()) * 1000.0;
-        if (frameMs < 14.0) {
-            SDL_Delay(static_cast<Uint32>(14.0 - frameMs));
-        }
+        frameOnce(app);  // 上限 (60fps) は frameOnce 側で吸収する
     }
 #endif
+}
+
+std::vector<double> runFrames(Game& app, int frames, const std::function<void(int)>& beforeFrame) {
+    std::vector<double> times;
+    times.reserve(size_t(frames));
+    for (int i = 0; i < frames; ++i) {
+        if (beforeFrame) {
+            beforeFrame(i);
+        }
+        Uint64 t0 = SDL_GetPerformanceCounter();
+        frameOnce(app);
+        Uint64 t1 = SDL_GetPerformanceCounter();
+        times.push_back(double(t1 - t0) / double(SDL_GetPerformanceFrequency()) * 1000.0);
+    }
+    return times;
 }
 
 }  // namespace platform

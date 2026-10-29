@@ -234,5 +234,6 @@ void RaceScene::frame(double dtSeconds) {
     app.drawWorld({viewX_, viewY_, viewZ_}, viewYaw_);
     app.drawGhost();
     app.drawEffects();
+    app.drawMirror({viewX_, viewY_, viewZ_}, viewYaw_);  // 上部の後方カメラ
     app.hud().draw(app);
 }

@@ -63,6 +63,8 @@ public:
                          const std::vector<TrailPoint>& right) const;
     void drawMarks(IRenderer& renderer) const;  // タイヤ痕 (車より先に描く)
     void drawSparks(IRenderer& renderer, const Orbit& camera) const;  // 火花
+    // ベンチ用: 演出を丸ごと止める (負荷の切り分け)。
+    void setEnabled(bool on) { enabled_ = on; }
     // テスト・診断用: 現在残っているタイヤ痕の区間数。
     int markCount() const { return static_cast<int>(marks_.size()); }
     int sparkCount() const { return static_cast<int>(sparks_.size()); }  // 検証用
@@ -91,4 +93,5 @@ private:
     Vec3 lastMarkL_{0, 0, 0};       // 左後輪の前回記録位置 (区間をつなぐ)
     Vec3 lastMarkR_{0, 0, 0};       // 右後輪の前回記録位置
     bool markChain_ = false;        // 前フレームも痕を出していたか (連続判定)
+    bool enabled_ = true;           // 演出全体の有効/無効 (ベンチ用)
 };

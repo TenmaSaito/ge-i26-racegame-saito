@@ -186,11 +186,15 @@ int glyphIndex(char c) {
 // シェーダ文字列・GL オブジェクト・描画状態はすべてこの実装の中に閉じる。
 // ---------------------------------------------------------------------------
 struct GlRenderer final : IRenderer {
-    int w = 1280;
-    int h = 720;
+        int w = 1;
+    int h = 1;
+    int fullW = 1;  // 子画面中も覚えておく全画面サイズ
+    int fullH = 1;
 
     bool init() override;
     void resize(int w, int h) override;
+    void setViewport(int x, int yFromBottom, int w, int h) override;
+    void clearViewport() override;
     int width() const override { return w; }
     int height() const override { return h; }
     void clearFrame() override;
@@ -267,7 +271,24 @@ void GlRenderer::clearFrame() {
 void GlRenderer::resize(int newWidth, int newHeight) {
     w = newWidth > 0 ? newWidth : 1;
     h = newHeight > 0 ? newHeight : 1;
+    fullW = w;
+    fullH = h;
     glViewport(0, 0, w, h);
+}
+
+void GlRenderer::setViewport(int x, int yFromBottom, int vw, int vh) {
+    glEnable(GL_SCISSOR_TEST);  // clear もこの範囲だけに効かせる
+    glScissor(x, yFromBottom, vw, vh);
+    glViewport(x, yFromBottom, vw, vh);
+    w = vw > 0 ? vw : 1;  // 投影のアスペクト計算用に子画面サイズを返す
+    h = vh > 0 ? vh : 1;
+}
+
+void GlRenderer::clearViewport() {
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, fullW, fullH);
+    w = fullW;
+    h = fullH;
 }
 
 void GlRenderer::drawSky() {

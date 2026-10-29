@@ -17,7 +17,7 @@ constexpr unsigned treeHash(int index, float side) {
 
 }  // namespace
 
-void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
+void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const {
     (void)groundY;  // 木は幹が細く接地が目立たないので基礎は付けない
     const Vec3 trunk{0.32f, 0.2f, 0.12f};
     const Vec3 leafA{0.08f, 0.30f, 0.10f};
@@ -37,13 +37,15 @@ void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, flo
         const float r2 = 0.72f * scale * cMul;
         mesh.addBox({top.x - r1, top.y + trunkH, top.z - r1},
                     {top.x + r1, top.y + trunkH + 1.9f * scale * hMul, top.z + r1}, leafA);
-        mesh.addBox({top.x - r2, top.y + trunkH + 1.5f * scale * hMul, top.z - r2},
-                    {top.x + r2, top.y + trunkH + 3.1f * scale * hMul, top.z + r2}, leafB);
+        if (detail < 2) {  // 遠景は樹冠を 1 段だけにして頂点を減らす
+            mesh.addBox({top.x - r2, top.y + trunkH + 1.5f * scale * hMul, top.z - r2},
+                        {top.x + r2, top.y + trunkH + 3.1f * scale * hMul, top.z + r2}, leafB);
+        }
         return;
     }
     // 針葉樹: 円錐を 3 段重ねる。8 面の三角ファンでローポリの稜を出す。
     auto cone = [&](float radius, float y0, float y1, Vec3 col) {
-        const int seg = 8;
+        const int seg = detail == 0 ? 8 : (detail == 1 ? 6 : 5);  // 遠いほど面を減らす
         const float rot = hash01(seed ^ 0x62u) * 3.14159f;
         for (int k = 0; k < seg; ++k) {
             float a0 = rot + float(k) / float(seg) * 6.2831853f;
@@ -57,11 +59,14 @@ void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, flo
     };
     const float u = scale * hMul;
     cone(1.55f * scale * cMul, base.y + trunkH - 0.25f * u, base.y + trunkH + 1.9f * u, leafA);
-    cone(1.12f * scale * cMul, base.y + trunkH + 1.15f * u, base.y + trunkH + 3.0f * u, leafB);
+    if (detail < 2) {  // 遠景は中段を省いて 2 段にする
+        cone(1.12f * scale * cMul, base.y + trunkH + 1.15f * u, base.y + trunkH + 3.0f * u, leafB);
+    }
     cone(0.66f * scale * cMul, base.y + trunkH + 2.25f * u, base.y + trunkH + 4.1f * u, leafA);
 }
 
-void BuildingObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
+void BuildingObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const {
+    (void)detail;  // 建物は距離で形を変えない
     // 静かな色の箱ビル。本体 + 少し大きい屋根キャップの 2 段構成。
     static const Vec3 palette[4] = {
         {0.62f, 0.64f, 0.66f},  // 白グレー
@@ -202,7 +207,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
                 if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
                     const float scale = 0.8f + float((h >> 16) % 100u) / 100.0f * 1.6f;
                     objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
-                                                 SceneryKind::Tree, pos, scale, h ^ 0xABu, ci);
+                                                 SceneryKind::Tree, pos, scale, h ^ 0xABu, ci, 1);
                 }
             }
             // 丘の木: 平らな帯の外 (180〜680m) にもまばらに生やす。
@@ -214,7 +219,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
                 if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
                     const float scale = 0.9f + float((h >> 16) % 100u) / 100.0f * 1.8f;
                     objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
-                                                 SceneryKind::Tree, pos, scale, h ^ 0x51u, ci);
+                                                 SceneryKind::Tree, pos, scale, h ^ 0x51u, ci, 2);
                 }
             }
             // 建物: 約 110m 間隔の候補から 6 割、芝の外 20〜50m
@@ -268,7 +273,8 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
     return chunks;
 }
 
-void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
+void HouseObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const {
+    (void)detail;  // 家は距離で形を変えない
     static const Vec3 wallPalette[4] = {
         {0.82f, 0.80f, 0.76f}, {0.78f, 0.72f, 0.64f},
         {0.72f, 0.76f, 0.78f}, {0.84f, 0.78f, 0.70f}};
@@ -551,9 +557,9 @@ void SceneryInstance::bake(CpuMesh& mesh, float groundY) const {
     static const BuildingObject kBuilding;
     static const HouseObject kHouse;
     switch (kind_) {
-        case SceneryKind::Tree: kTree.build(mesh, pos_, scale_, seed_, groundY); break;
-        case SceneryKind::Building: kBuilding.build(mesh, pos_, scale_, seed_, groundY); break;
-        case SceneryKind::House: kHouse.build(mesh, pos_, scale_, seed_, groundY); break;
+        case SceneryKind::Tree: kTree.build(mesh, pos_, scale_, seed_, groundY, detail_); break;
+        case SceneryKind::Building: kBuilding.build(mesh, pos_, scale_, seed_, groundY, detail_); break;
+        case SceneryKind::House: kHouse.build(mesh, pos_, scale_, seed_, groundY, detail_); break;
     }
 }
 

@@ -13,7 +13,7 @@
 class SceneryObject {
 public:
     virtual ~SceneryObject() = default;
-    virtual void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const = 0;
+    virtual void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const = 0;
 
 protected:
     static constexpr float hash01(unsigned h) {
@@ -26,18 +26,18 @@ protected:
 
 class TreeObject : public SceneryObject {
 public:
-    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const override;
 };
 
 class BuildingObject : public SceneryObject {
 public:
-    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const override;
 };
 
 // 住宅（壁 + 切妻屋根）。住宅街はこれをまとめて配置する。
 class HouseObject : public SceneryObject {
 public:
-    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
+    void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY, int detail) const override;
 };
 
 // 景観の種類。インスタンスの判別と、焼き込み時の形状生成器の選択に使う。
@@ -49,12 +49,13 @@ enum class SceneryKind { Tree, Building, House };
 // bake() が種類に応じた生成器 (TreeObject 等) へ委譲する。
 class SceneryInstance : public IObject {
 public:
-    SceneryInstance(SceneryKind kind, Vec3 pos, float scale, unsigned seed, int chunk)
-        : kind_(kind), pos_(pos), scale_(scale), seed_(seed), chunk_(chunk) {}
+    SceneryInstance(SceneryKind kind, Vec3 pos, float scale, unsigned seed, int chunk, int detail = 0)
+        : kind_(kind), pos_(pos), scale_(scale), seed_(seed), chunk_(chunk), detail_(detail) {}
 
     SceneryKind kind() const { return kind_; }  // 種類 (木/建物/家)
     Vec3 pos() const { return pos_; }           // 接地位置
     int chunk() const { return chunk_; }        // 所属チャンク番号
+    int detail() const { return detail_; }      // 描画の細かさ
 
     // 自分の形状をチャンクのメッシュへ焼き込む。groundY は基礎の到達先。
     void bake(CpuMesh& mesh, float groundY) const;
@@ -64,6 +65,7 @@ private:
     Vec3 pos_;           // 接地位置 (base)
     float scale_;        // 大きさ倍率
     unsigned seed_;      // バリエーション決定用のハッシュ
+    int detail_ = 0;     // 描画の細かさ (0 近景 / 1 中景 / 2 遠景: 遠いほど頂点を減らす)
     int chunk_;          // 焼き込み先チャンクの番号
 };
 

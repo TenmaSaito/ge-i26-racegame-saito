@@ -90,6 +90,8 @@ public:
     // --- シーンから使う共通サービス -----------------------------------------
     Hud& hud() { return *hud_; }              // HUD 描画器
     Effects& effects() { return effects_; }   // 演出 (煙・光跡・タイヤ痕)
+    // ベンチ用: 景観 (地形とチャンク) の描画を止める (負荷の切り分け)。
+    void setSceneryEnabled(bool on) { sceneryEnabled_ = on; }
     Ghost& ghost() { return ghost_; }         // ゴースト (記録と再生)
     // 音声実装の差し込み (platform が生成して渡す)。無ければ無音。
     void installAudio(IAudio* audio) { audio_ = audio; }
@@ -122,6 +124,8 @@ public:
     void drawWorld(Vec3 carPos, float carYaw);
     // 煙と光跡の描画 (ワールド描画の後、HUD の前)。
     void drawEffects();
+    // バックミラー: 画面上部の子画面に後方カメラの映像を描く (レース用)。
+    void drawMirror(Vec3 carPos, float carYaw);
 
     // --- セッション状態の設定 (シーンが操作する表示・進行フラグ) -------------
     void setPaused(bool v) { paused_ = v; }
@@ -197,6 +201,9 @@ private:
 
     // --- 進行状態 ---
     bool running_ = true;         // メインループの継続フラグ
+    bool sceneryEnabled_ = true;  // 景観描画の有効/無効 (ベンチ用)
+    float cullRadius_ = 900.0f;   // 景観カリング距離 (ミラー描画時は絞る)
+    bool drawBackdrop_ = true;    // 地形を描くか (ミラー描画時は省く)
     bool paused_ = false;         // ポーズ中か (P キー)
     bool showHelp_ = true;        // キー説明の表示 (H キー、ネイティブのみ)
     bool showDriftDebug_ = true;  // ドリフトデバッグ表示 (B キー)

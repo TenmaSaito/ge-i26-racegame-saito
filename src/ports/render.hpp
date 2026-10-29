@@ -32,6 +32,11 @@ struct IRenderer {
     virtual int height() const = 0;
 
     virtual void clearFrame() = 0;
+    // 画面内の一部分だけに描く (バックミラー等の子画面用)。この間は
+    // width()/height() が子画面の大きさを返し、clear も範囲内だけに効く。
+    // yFromBottom は GL の慣例で下端からの位置。終わったら clearViewport。
+    virtual void setViewport(int x, int yFromBottom, int w, int h) = 0;
+    virtual void clearViewport() = 0;
     virtual void drawSky() = 0;
     virtual void beginWorld(const Mat4& viewProj, Vec3 cameraPos) = 0;
     virtual void draw(const GpuMesh& mesh, const Mat4& model) = 0;

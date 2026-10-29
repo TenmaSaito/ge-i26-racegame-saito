@@ -213,12 +213,16 @@ void Game::beginWorldDraw() {
 // タイトル／レース／リザルトで共通。carPos/carYaw は描画用ポーズ。
 void Game::drawWorld(Vec3 carPos, float carYaw) {
     Mat4 identity;
-    renderer_->draw(backdrop_, identity);
-    // 景観はチャンク単位で距離カリング (900m 以内だけ描く)。
-    for (size_t i = 0; i < scenery_.size(); ++i) {
-        float dx = sceneryCenters_[i].x - camera_.eye.x;
-        float dz = sceneryCenters_[i].z - camera_.eye.z;
-        if (dx * dx + dz * dz < 900.0f * 900.0f) renderer_->draw(scenery_[i], identity);
+    if (sceneryEnabled_) {
+        if (drawBackdrop_) {
+            renderer_->draw(backdrop_, identity);
+        }
+        // 景観はチャンク単位で距離カリング (通常 900m、ミラー時は 420m)。
+        for (size_t i = 0; i < scenery_.size(); ++i) {
+            float dx = sceneryCenters_[i].x - camera_.eye.x;
+            float dz = sceneryCenters_[i].z - camera_.eye.z;
+            if (dx * dx + dz * dz < cullRadius_ * cullRadius_) renderer_->draw(scenery_[i], identity);
+        }
     }
     // タイヤ痕は路面に残るものなので、車より先 (景観の直後) に描く。
     effects_.drawMarks(*renderer_);
@@ -302,6 +306,56 @@ void Game::drawGhost() {
         };
         effects_.drawGhostTrails(*renderer_, conv(gl), conv(gr));
     }
+}
+
+// バックミラー。画面上部中央の子画面に、車の後ろ向きカメラの映像を
+// もう一度ワールド描画して映す。自車はカメラの死角 (前方) なので映らない。
+// 枠と REAR の文字は HUD 座標 (左上原点) で最後に描く。
+void Game::drawMirror(Vec3 carPos, float carYaw) {
+    if (!renderer_) {
+        return;
+    }
+    const int fullW = renderer_->width();
+    const int fullH = renderer_->height();
+    const int w = fullW * 44 / 100;         // 子画面の幅 (画面の 44%)
+    const int h = fullH * 16 / 100;         // 子画面の高さ (画面の 16%)
+    const int x = (fullW - w) / 2;          // 中央寄せ
+    const int marginTop = fullH * 2 / 100;  // 上端からの余白
+    const int yBottom = fullH - h - marginTop;  // GL は下端原点
+
+    Orbit saved = camera_;  // メインのカメラを退避して後方カメラに差し替える
+    Vec3 fwd{std::sin(carYaw), 0, std::cos(carYaw)};
+    Orbit rear;
+    // 目の位置はルーフより上・少し前。自車のウイングやフィンが映り込むと
+    // 視界の真ん中を塞ぐので、それらが下端の外へ出る高さにしてある。
+    rear.eye = carPos + Vec3{0, 2.0f, 0} + fwd * 0.5f;
+    rear.look = rear.eye - fwd * 10.0f + Vec3{0, -1.0f, 0};  // 真後ろを少し下向きに
+    rear.ready = true;
+    rear.mode = saved.mode;
+    camera_ = rear;
+    // ミラー側は軽く: 地形 (遠景) は省き、景観も 420m までだけ描く。
+    const float savedCull = cullRadius_;
+    const bool savedBackdrop = drawBackdrop_;
+    cullRadius_ = 420.0f;
+    drawBackdrop_ = false;
+    renderer_->setViewport(x, yBottom, w, h);
+    beginWorldDraw();           // 子画面の範囲だけ消して空と投影を設定
+    drawWorld(carPos, carYaw);  // 景観・痕・影 (自車は死角で映らない)
+    drawGhost();                // 後ろにいるゴーストも映す
+    renderer_->clearViewport();
+    cullRadius_ = savedCull;
+    drawBackdrop_ = savedBackdrop;
+    camera_ = saved;
+
+    // 枠 (4 本の帯) とラベル。HUD は左上原点なので y を読み替える。
+    const float fx = float(x), fy = float(marginTop), fw = float(w), fh = float(h);
+    renderer_->beginHud();
+    renderer_->addQuad(fx - 3, fy - 3, fx + fw + 3, fy, 0.04f, 0.05f, 0.07f, 0.9f);
+    renderer_->addQuad(fx - 3, fy + fh, fx + fw + 3, fy + fh + 3, 0.04f, 0.05f, 0.07f, 0.9f);
+    renderer_->addQuad(fx - 3, fy, fx, fy + fh, 0.04f, 0.05f, 0.07f, 0.9f);
+    renderer_->addQuad(fx + fw, fy, fx + fw + 3, fy + fh, 0.04f, 0.05f, 0.07f, 0.9f);
+    renderer_->drawText(fx + 8, fy + 6, 2.0f, "REAR", 0.92f, 0.96f, 1.0f, 0.95f);
+    renderer_->flushHud();
 }
 
 // 煙と光跡の描画 (車の後、HUD の前)。

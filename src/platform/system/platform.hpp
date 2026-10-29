@@ -8,7 +8,9 @@
 // SDL が窓口になる。createWindow で画像・音声の下地も初期化する。
 // ============================================================================
 
+#include <functional>
 #include <string>
+#include <vector>
 
 struct Game;
 struct Track;  // コース実体 (track.hpp)。loadTrack の引数用
@@ -46,5 +48,11 @@ void destroyWindow(Game& app);
 // メインループを駆動する（ネイティブは while、ブラウザは
 // emscripten_set_main_loop）。Game の running が false になったら戻る。
 void runMainLoop(Game& app);
+
+// フレームレート上限 (60fps) の有効/無効。ベンチマークでは切る。
+void setFrameCapEnabled(bool enabled);
+// ベンチ用: beforeFrame(i) を呼んでから 1 フレーム回す、を frames 回。
+// 各フレームの所要時間 (ms) を返す。
+std::vector<double> runFrames(Game& app, int frames, const std::function<void(int)>& beforeFrame);
 
 }  // namespace platform
