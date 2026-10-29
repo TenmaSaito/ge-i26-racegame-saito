@@ -22,7 +22,8 @@
 
 #include <functional>
 #include "scene.hpp"    // IScene / SceneId
-#include "track.hpp"    // Track
+#include "track.hpp"
+#include "scenery.hpp"  // SceneryBuilder (地形の高さ参照用)    // Track
 
 #include <functional>
 #include <memory>
@@ -108,6 +109,8 @@ public:
     const ObjectManager& objects() const { return objects_; }
     // レースを初期状態に戻す (車・計時・演出・カメラをまとめて)。
     void resetRace();
+    // 地形 (背景メッシュ) の高さ。タイトルカメラが斜面に埋まらないために使う。
+    float terrainHeightAt(float x, float z) const { return sceneryBuilder_.terrainHeightAt(x, z); }
     // 現在のチューニング値を差し込み口経由で保存する (シーンからの依頼用)。
     void saveTuningNow();
     // FPS 表示の平滑化 (シーンが毎フレーム知らせる)。
@@ -162,6 +165,7 @@ private:
     IAudio* audio_ = nullptr;  // 音声実装 (所有は platform)
     std::function<void(const std::string&)> rankingSink_;  // ランキング保存口
     Track track_;        // コースデータ
+    SceneryBuilder sceneryBuilder_{track_};  // 地形の高さを引くために保持する
     Car car_;            // 自車
     Race race_;          // 周回・計時
     Orbit camera_;       // カメラ状態

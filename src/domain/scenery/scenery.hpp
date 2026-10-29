@@ -96,6 +96,8 @@ public:
     // 地形の高さ (x, z 地点)。コース近傍は路面中心の高さに張り付き、
     // 離れるほど滑らかな丘陵が盛り上がる。木や基礎の接地にも使う。
     float terrainHeightAt(float x, float z) const;
+    // 1 区間だけを見た地形高 (terrainHeightAt が 2 区間をブレンドする)。
+    float legProfile(const TrackPose& q) const;
 
 private:
     const Track& track_;

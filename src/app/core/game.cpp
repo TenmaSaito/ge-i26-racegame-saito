@@ -127,7 +127,7 @@ bool Game::loadCourse(const std::string& stem) {
         scenery_.push_back(renderer_->upload(track_.visualChunks[i]));
         sceneryCenters_.push_back(track_.visualCenters[i]);
     }
-    SceneryBuilder builder(track_);
+    SceneryBuilder& builder = sceneryBuilder_;  // メンバを使い回す (高さ参照用)
     for (SceneryChunk& chunk : builder.build(objects_)) {
         scenery_.push_back(renderer_->upload(chunk.mesh));
         sceneryCenters_.push_back(chunk.center);

@@ -216,6 +216,18 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         CpuMesh terrain = builder.buildBackdrop();
         std::printf("self-test terrain tris %d\n", int(terrain.indices.size() / 3));
         if (terrain.indices.size() < 30000) return 15;  // 高度場グリッド一式
+        // メッシュ検証: 路面帯 (中心から 15.5m 以内 (アスファルト+縁石の帯)) の三角形の重心が路面より
+        // 1.2m 以上上に来ていたら「屋根化」している (実績あり)。
+        // 20m より外は意図した山肌なので対象外。
+        for (size_t ti = 0; ti + 2 < terrain.indices.size(); ti += 3) {
+            Vec3 c{0, 0, 0};
+            for (int v = 0; v < 3; ++v) {
+                const float* p = &terrain.vertices[size_t(terrain.indices[ti + v]) * 9];
+                c.x += p[0] / 3.0f; c.y += p[1] / 3.0f; c.z += p[2] / 3.0f;
+            }
+            TrackPose q = track.queryPlanar(c.x, c.z);
+            if (q.found && q.xzDist < 15.5f && c.y > q.centerY + 1.2f) return 19;
+        }
         const TrackSample& s0 = track.samples[100];
         TrackPose g0 = track.query(s0.x, s0.z, s0.y);
         float near = builder.terrainHeightAt(s0.x, s0.z);
@@ -223,12 +235,12 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         std::printf("self-test terrain near %.1f far %.1f (center %.1f)\n", near, far, g0.centerY);
         if (std::fabs(near - g0.centerY) > 0.01f) return 16;
         if (far < g0.centerY + 4.0f) return 17;  // 丘+遠景で必ず少しは盛り上がる
-        // 回帰検証: 全サンプル地点で地形が路面中心高と一致すること。
-        // 立体交差で上下の区間を取り違えると、ここが大きくずれて
-        // 「地形が路面を覆う」事故になる (実際に起きた)。
+        // 回帰検証: 全サンプル地点で地形が路面より上に出ないこと。
+        // 立体交差で上下の区間を取り違えると地形が路面を覆う事故になる
+        // (実際に起きた)。橋の下では地形が下の路面に付くので「下」は許す。
         for (const TrackSample& smp : track.samples) {
             float h = builder.terrainHeightAt(smp.x, smp.z);
-            if (std::fabs(h - smp.y) > 0.6f) return 18;
+            if (h > smp.y + 0.6f) return 18;
         }
     }
     // 火花: 壁に擦らせた車を与えると火花が出ること。

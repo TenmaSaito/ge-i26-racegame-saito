@@ -454,7 +454,74 @@ TrackPose Track::queryPlanar(float x, float z) const {
     TrackPose best;
     float bestScore = 1.0e30f;
     const int n = static_cast<int>(samples.size());
+    // 全区間の投影は重い (地形生成で何万回も呼ぶ)。まずサンプル「点」の
+    // 最寄りを求め、その前後 24 区間だけを投影評価する。サンプル間隔は
+    // 約 4m なので、本当の最寄り区間は必ずこの窓の中にある。
+    int nearIdx = 0;
+    float nearD2 = 1.0e30f;
     for (int i = 0; i < n; ++i) {
+        float dx = x - samples[i].x;
+        float dz = z - samples[i].z;
+        float d2 = dx * dx + dz * dz;
+        if (d2 < nearD2) {
+            nearD2 = d2;
+            nearIdx = i;
+        }
+    }
+    for (int k = -24; k <= 24; ++k) {
+        int i = (nearIdx + k) % n;
+        if (i < 0) i += n;
+        const TrackSample& a = samples[i];
+        const TrackSample& b = samples[(i + 1) % n];
+        float abx = b.x - a.x;
+        float abz = b.z - a.z;
+        float len2 = abx * abx + abz * abz;
+        if (len2 < 1e-4f) {
+            continue;
+        }
+        float t = ((x - a.x) * abx + (z - a.z) * abz) / len2;
+        t = clampf(t, 0.0f, 1.0f);
+        float cx = a.x + abx * t;
+        float cz = a.z + abz * t;
+        float dx = x - cx;
+        float dz = z - cz;
+        float score = dx * dx + dz * dz;  // 平面距離のみ (高さは見ない)
+        if (score >= bestScore) {
+            continue;
+        }
+        bestScore = score;
+        float invLen = 1.0f / std::sqrt(len2);
+        float tx = abx * invLen;
+        float tz = abz * invLen;
+        best.found = true;
+        best.s = a.s + std::sqrt(len2) * t;
+        if (best.s >= length) {
+            best.s -= length;
+        }
+        best.rightX = tz;
+        best.rightZ = -tx;
+        best.lateral = dx * best.rightX + dz * best.rightZ;
+        best.centerY = a.y + (b.y - a.y) * t;
+        best.cross = a.cross + (b.cross - a.cross) * t;
+        best.yaw = std::atan2(tx, tz);
+        best.xzDist = std::sqrt(dx * dx + dz * dz);
+        best.corner = t < 0.5f ? a.corner : b.corner;
+        best.nameId = t < 0.5f ? a.nameId : b.nameId;
+    }
+    return best;
+}
+
+TrackPose Track::queryPlanarNear(float x, float z, int centerIdx) const {
+    TrackPose best;
+    float bestScore = 1.0e30f;
+    const int n = static_cast<int>(samples.size());
+    // 全区間の投影は重い (地形生成で何万回も呼ぶ)。まずサンプル「点」の
+    // 最寄りを求め、その前後 24 区間だけを投影評価する。サンプル間隔は
+    // 約 4m なので、本当の最寄り区間は必ずこの窓の中にある。
+    const int nearIdx = centerIdx;  // 窓の中心は呼び出し側が決める
+    for (int k = -24; k <= 24; ++k) {
+        int i = (nearIdx + k) % n;
+        if (i < 0) i += n;
         const TrackSample& a = samples[i];
         const TrackSample& b = samples[(i + 1) % n];
         float abx = b.x - a.x;

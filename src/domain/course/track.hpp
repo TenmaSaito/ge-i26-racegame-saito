@@ -56,6 +56,8 @@ struct Track {
     // 立体交差の上下を取り違え、地形が路面を覆ったり谷になったりする。
     // 車の物理は従来の query (高さ優先) を使うこと。
     TrackPose queryPlanar(float x, float z) const;
+    // queryPlanar の窓版: centerIdx の前後だけを評価する (第2の区間用)。
+    TrackPose queryPlanarNear(float x, float z, int centerIdx) const;
     float wallLateral() const { return halfWidth + curbWidth + runoff; }
     const char* nameOf(int nameId) const;
 };

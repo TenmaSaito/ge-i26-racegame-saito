@@ -20,24 +20,45 @@ constexpr unsigned treeHash(int index, float side) {
 void TreeObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
     (void)groundY;  // 木は幹が細く接地が目立たないので基礎は付けない
     const Vec3 trunk{0.32f, 0.2f, 0.12f};
-    const Vec3 leafA{0.10f, 0.34f, 0.12f};
-    const Vec3 leafB{0.13f, 0.42f, 0.15f};
+    const Vec3 leafA{0.08f, 0.30f, 0.10f};
+    const Vec3 leafB{0.12f, 0.40f, 0.14f};
     // 個体差: 背の高さ (hMul) と樹冠の広がり (cMul) を別々に振る。
-    // 全体スケールだけだと「同じ形の大小」にしかならず、並んだときに
-    // コピペ感が出るため、縦横比も変えてシルエットをばらけさせる。
     const float hMul = 0.8f + hash01(seed ^ 0x33u) * 0.7f;   // 0.8〜1.5
     const float cMul = 0.85f + hash01(seed ^ 0x44u) * 0.5f;  // 0.85〜1.35
     const float w = 0.16f * scale;
-    const float trunkH = 1.6f * scale * hMul;
+    const float trunkH = 1.5f * scale * hMul;
     mesh.addBox({base.x - w, base.y, base.z - w},
                 {base.x + w, base.y + trunkH, base.z + w}, trunk);
-    const float r1 = 1.05f * scale * cMul;
-    const float r2 = 0.72f * scale * cMul;
     const float lean = (hash01(seed ^ 0x51u) - 0.5f) * 0.5f * scale;
-    mesh.addBox({base.x - r1, base.y + trunkH, base.z - r1},
-                {base.x + r1, base.y + trunkH + 1.9f * scale * hMul, base.z + r1}, leafA);
-    mesh.addBox({base.x + lean - r2, base.y + trunkH + 1.5f * scale * hMul, base.z - r2},
-                {base.x + lean + r2, base.y + trunkH + 3.1f * scale * hMul, base.z + r2}, leafB);
+    const Vec3 top{base.x + lean, base.y, base.z};
+    if ((seed >> 3) % 10u < 3u) {
+        // 3 割は広葉樹 (箱の樹冠 2 段)。森の単調さを崩す。
+        const float r1 = 1.05f * scale * cMul;
+        const float r2 = 0.72f * scale * cMul;
+        mesh.addBox({top.x - r1, top.y + trunkH, top.z - r1},
+                    {top.x + r1, top.y + trunkH + 1.9f * scale * hMul, top.z + r1}, leafA);
+        mesh.addBox({top.x - r2, top.y + trunkH + 1.5f * scale * hMul, top.z - r2},
+                    {top.x + r2, top.y + trunkH + 3.1f * scale * hMul, top.z + r2}, leafB);
+        return;
+    }
+    // 針葉樹: 円錐を 3 段重ねる。8 面の三角ファンでローポリの稜を出す。
+    auto cone = [&](float radius, float y0, float y1, Vec3 col) {
+        const int seg = 8;
+        const float rot = hash01(seed ^ 0x62u) * 3.14159f;
+        for (int k = 0; k < seg; ++k) {
+            float a0 = rot + float(k) / float(seg) * 6.2831853f;
+            float a1 = rot + float(k + 1) / float(seg) * 6.2831853f;
+            Vec3 p0{top.x + std::cos(a0) * radius, y0, top.z + std::sin(a0) * radius};
+            Vec3 p1{top.x + std::cos(a1) * radius, y0, top.z + std::sin(a1) * radius};
+            Vec3 apex{top.x, y1, top.z};
+            Vec3 n = normalize(cross(p1 - p0, apex - p0));
+            mesh.addTriangle(p0, p1, apex, n, col);
+        }
+    };
+    const float u = scale * hMul;
+    cone(1.55f * scale * cMul, base.y + trunkH - 0.25f * u, base.y + trunkH + 1.9f * u, leafA);
+    cone(1.12f * scale * cMul, base.y + trunkH + 1.15f * u, base.y + trunkH + 3.0f * u, leafB);
+    cone(0.66f * scale * cMul, base.y + trunkH + 2.25f * u, base.y + trunkH + 4.1f * u, leafA);
 }
 
 void BuildingObject::build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const {
@@ -159,23 +180,35 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
         for (int s = -1; s <= 1; s += 2) {
             const float side = float(s);
             const float baseY = edgeY(i, side);
-            // 木: 約 14m 間隔、壁の外 2.5〜15.5m
+            // 木 (近景): 約 6m 間隔で密に。ガードレールのすぐ外から斜面へ。
+            // 高さは地形に合わせ、斜面に立つ木も浮かせない。
             const unsigned h = treeHash(i, side);
-            if (i % 7 == 0 && (h % 100u) < 88u) {
-                const float lat = grassOuter + 2.5f + float((h >> 8) % 100u) / 100.0f * 13.0f;
+            if (i % 3 == 0 && (h % 100u) < 92u) {
+                const float lat = grassOuter + 1.5f + float((h >> 8) % 100u) / 100.0f * 36.0f;
                 Vec3 pos = pointAt(i, side * lat);
-                pos.y = baseY;
-                if (clearOfOtherRoad(pos, 6.0f, baseY, i)) {
+                pos.y = terrainHeightAt(pos.x, pos.z) - 0.15f;
+                if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
                     // 大きさは 0.6〜2.1 倍まで大きく振る（形の個体差は TreeObject 側）。
                     const float scale = 0.6f + float((h >> 16) % 100u) / 100.0f * 1.5f;
                     objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
                                                  SceneryKind::Tree, pos, scale, h, ci);
                 }
             }
+            // 木 (中景): 斜面の森。約 8m 間隔、横 50〜130m。
+            if (i % 3 == 0 && (h % 100u) < 86u) {
+                const float lat = 55.0f + float((h >> 6) % 100u) / 100.0f * 110.0f;
+                Vec3 pos = pointAt(i, side * lat);
+                pos.y = terrainHeightAt(pos.x, pos.z) - 0.15f;
+                if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
+                    const float scale = 0.8f + float((h >> 16) % 100u) / 100.0f * 1.6f;
+                    objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
+                                                 SceneryKind::Tree, pos, scale, h ^ 0xABu, ci);
+                }
+            }
             // 丘の木: 平らな帯の外 (180〜680m) にもまばらに生やす。
             // 地形の上に立つので、高さは terrainHeightAt で決める。
-            if (i % 11 == 0 && (h % 100u) < 70u) {
-                const float lat = 180.0f + float((h >> 3) % 100u) / 100.0f * 500.0f;
+            if (i % 6 == 0 && (h % 100u) < 80u) {
+                const float lat = 130.0f + float((h >> 3) % 100u) / 100.0f * 390.0f;
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = terrainHeightAt(pos.x, pos.z);
                 if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
@@ -189,7 +222,8 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
                 const float lat = grassOuter + 27.0f + float((h >> 5) % 100u) / 100.0f * 28.0f;
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = baseY;
-                if (clearOfOtherRoad(pos, 17.0f, baseY, i)) {
+                if (std::fabs(terrainHeightAt(pos.x, pos.z) - baseY) < 5.0f &&
+                    clearOfOtherRoad(pos, 17.0f, baseY, i)) {
                     objects.add<SceneryInstance>("Building#" + std::to_string(buildingNo++),
                                                  SceneryKind::Building, pos, 1.0f, h ^ 0x77u, ci);
                 }
@@ -199,6 +233,9 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
                 const float clat = grassOuter + 55.0f + float((h >> 11) % 100u) / 100.0f * 55.0f;
                 Vec3 cpos = pointAt(i, side * clat);
                 const float cbaseY = edgeY(i, side);
+                if (std::fabs(terrainHeightAt(cpos.x, cpos.z) - cbaseY) >= 4.0f) {
+                    continue;  // 集落は平らな場所だけ (斜面には建てない)
+                }
                 const int count = 5 + int((h >> 20) % 5u);
                 for (int u = 0; u < count; ++u) {
                     unsigned hh = treeHash(i * 31 + u * 7, side);
@@ -304,22 +341,91 @@ void SceneryBuilder::ensureBumps() const {
 // その上に「丘の集合」の盛り上がりと、遠景を閉じる緩い隆起を重ねる。
 // 丘の影響は最寄りの路面からの距離で絞る (回廊フェード) ので、コースが
 // 近くを通る場所では丘が路面を埋めない。
+float SceneryBuilder::legProfile(const TrackPose& q) const {
+    // 1 区間だけを見たときの地形高。中心高 + その区間の脇の山肌 + 遠景。
+    const float lat = std::fabs(q.lateral);
+    float y = q.centerY;
+    const float flatStart = 22.0f;
+    if (lat > flatStart) {
+        const float d = lat - flatStart;
+        const float t = q.s / track_.length;
+        const float phase = q.lateral >= 0.0f ? 0.0f : 2.1f;  // 左右で位相をずらす
+        float vf = 0.62f + 0.38f * std::sin(6.2831853f * 2.0f * t + phase) +
+                   0.18f * std::sin(6.2831853f * 5.0f * t + phase * 2.0f);
+        vf = vf < 0.25f ? 0.25f : (vf > 1.15f ? 1.15f : vf);
+        // 立ち上がりは S 字に: 麓 (d 小) では緩くして芝の縁へ被せない。
+        const float riseBase = 1.0f - std::exp(-d / 110.0f);
+        y += 95.0f * std::pow(riseBase, 1.6f) * vf;
+        if (lat > 500.0f) {
+            const float u = std::min((lat - 500.0f) / 1100.0f, 1.0f);
+            const float nn = std::sin(6.2831853f * 3.0f * t + 2.0f * std::sin(lat * 0.004f));
+            y += std::pow(u, 1.6f) * 45.0f * (0.82f + 0.33f * nn);
+        }
+    }
+    return y;
+}
+
 float SceneryBuilder::terrainHeightAt(float x, float z) const {
-    // 高さのヒント無しで引くと、立体交差するコースでは別の区間を掴む。
-    // 一度引いて得た中心高をヒントに引き直し、上下に近い区間へ寄せる。
     // 区間選びは平面距離のみ (queryPlanar)。高さで選ぶ query だと
     // 立体交差で上下を取り違え、地形が路面を覆う事故が起きた。
-    TrackPose q = track_.queryPlanar(x, z);
-    if (!q.found) {
+    TrackPose q1 = track_.queryPlanar(x, z);
+    if (!q1.found) {
         return 0.0f;
     }
-    const float lat = std::fabs(q.lateral);
-    // 回廊フェード: 路面から 30m までは地形を盛らない (コースを埋めない)、
-    // 110m で完全に盛る。
-    float fade = (lat - 30.0f) / 80.0f;
+    // 第 2 区間 (周回位置が十分に離れた最寄り) も引き、2 つの地形高を
+    // なめらかにつなぐ。最寄りだけで決めると、近接した 2 区間の境界で
+    // 高さが階段状に跳ね、メッシュが壁になって路面や車を覆ってしまう。
+    int idx2 = -1;
+    float d2min = 1.0e30f;
+    const int n = int(track_.samples.size());
+    for (int i = 0; i < n; ++i) {
+        float ds = std::fabs(track_.samples[i].s - q1.s);
+        if (ds > track_.length * 0.5f) {
+            ds = track_.length - ds;
+        }
+        if (ds < 80.0f) {
+            continue;  // 同じ区間の続きは第 2 候補にしない
+        }
+        const float dx = x - track_.samples[i].x;
+        const float dz = z - track_.samples[i].z;
+        const float d2 = dx * dx + dz * dz;
+        if (d2 < d2min) {
+            d2min = d2;
+            idx2 = i;
+        }
+    }
+    float y;
+    float fadeLat = std::fabs(q1.lateral);  // 丘フェード用の横距離 (近い方)
+    const float p1 = legProfile(q1);
+    if (idx2 < 0) {
+        y = p1;
+    } else {
+        TrackPose q2 = track_.queryPlanarNear(x, z, idx2);
+        fadeLat = std::min(fadeLat, std::fabs(q2.lateral));
+        const float p2 = legProfile(q2);
+        const float d1 = q1.xzDist;
+        const float dd2 = q2.xzDist;
+        if (d1 < 26.0f && dd2 < 26.0f) {
+            // 立体交差・並走の密着部: 低い方の地形に付け、高い方は橋にする。
+            // 高い方に付けると、その頂点を共有する三角形が低い方の路面へ
+            // 覆い被さってしまう (高度場では断面の段差を表せないため)。
+            y = q1.centerY <= q2.centerY ? p1 : p2;
+        } else if (d1 < 22.0f || dd2 >= d1 + 25.0f) {
+            y = p1;  // 自分の回廊の中、または第 2 区間が十分に遠い
+        } else {
+            // 近接する 2 区間の間では「低い方」に付ける。平均 (ブレンド) だと
+            // 高い方の斜面が低い方の路面へ覆い被さってしまうため。
+            // どちらの路面から見ても、その区間自身の地形以下にしかならない。
+            y = std::min(p1, p2);
+        }
+    }
+    // 丘の集合 (ワールド座標の起伏なので区間合成の後に足す)。
+    // 路面から 40m までは効かせず 110m で全開にする。横距離は合成に
+    // 使った 2 区間のうち近い方で見る (隣の路面の脇に丘を盛らない)。
+    const float lat = fadeLat;
+    float fade = (lat - 40.0f) / 70.0f;
     fade = fade < 0.0f ? 0.0f : (fade > 1.0f ? 1.0f : fade);
     fade = fade * fade * (3.0f - 2.0f * fade);  // smoothstep
-    float y = q.centerY;
     if (fade > 0.0f) {
         ensureBumps();
         float bumps = 0.0f;
@@ -328,22 +434,13 @@ float SceneryBuilder::terrainHeightAt(float x, float z) const {
             const float dz = z - b.z;
             const float rr = b.radius * 2.4f;
             if (dx > rr || dx < -rr || dz > rr || dz < -rr) {
-                continue;  // 届かない丘は計算しない
+                continue;
             }
             const float d2 = dx * dx + dz * dz;
             bumps += b.height * std::exp(-2.0f * d2 / (b.radius * b.radius));
         }
-        // 丘が重なる場所で際限なく高くならないよう、柔らかく頭打ちにする
-        // (重なりすぎると不自然な大斜面になって陰影も真っ黒に潰れる)。
-        bumps = 40.0f * std::tanh(bumps / 40.0f);
+        bumps = 40.0f * std::tanh(bumps / 40.0f);  // 重なりの頭打ち
         y += bumps * fade;
-        // 遠景: 視界の奥を閉じる緩い隆起 (周回周期のうねり付き)。
-        if (lat > 500.0f) {
-            const float t = q.s / track_.length;
-            const float u = std::min((lat - 500.0f) / 1100.0f, 1.0f);
-            const float n = std::sin(6.2831853f * 3.0f * t + 2.0f * std::sin(lat * 0.004f));
-            y += std::pow(u, 1.6f) * 75.0f * (0.82f + 0.33f * n);
-        }
     }
     return y;
 }
@@ -399,6 +496,13 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
                 if (forest > 0.3f) {
                     col = Vec3{0.11f, 0.27f, 0.10f};
                 }
+                // 中規模の斑: 斜面が一色の壁に見えないよう、明暗の群れを作る。
+                float patch = std::sin(p.x * 0.055f + 1.7f) * std::sin(p.z * 0.047f + 0.4f);
+                if (patch > 0.25f) {
+                    col = col * 0.82f + Vec3{0.05f, 0.10f, 0.02f};
+                } else if (patch < -0.45f) {
+                    col = col * 1.13f;
+                }
                 float rockMix = std::min(1.0f, std::max(0.0f, (slope - 0.10f) * 3.0f));
                 if (relief > 50.0f) {
                     rockMix = std::max(rockMix, std::min(1.0f, (relief - 50.0f) / 60.0f));
@@ -424,9 +528,19 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
             }
         }
     };
-    // 内側: 細かい格子 (16m)。外側: 粗い格子 (80m) を少し沈めて重ねる。
-    buildGrid(minX - 260.0f, minZ - 260.0f, maxX + 260.0f, maxZ + 260.0f, 16.0f, 0.0f);
-    buildGrid(minX - 1500.0f, minZ - 1500.0f, maxX + 1500.0f, maxZ + 1500.0f, 80.0f, -0.6f);
+    // 内側: 細かい格子 (12m、道路脇の斜面をなめらかに)。
+    const float ix0 = minX - 260.0f, iz0 = minZ - 260.0f;
+    const float ix1 = maxX + 260.0f, iz1 = maxZ + 260.0f;
+    buildGrid(ix0, iz0, ix1, iz1, 12.0f, 0.0f);
+    // 外側: 粗い格子 (80m) を内側の四辺の外にだけ敷く。全面に敷くと、
+    // 丘の上の頂点同士を結ぶ巨大な三角形が内側の谷や路面を屋根のように
+    // 覆ってしまう (実際に車が埋まった)。帯は必ず内側に触れない。
+    const float ox0 = minX - 1500.0f, oz0 = minZ - 1500.0f;
+    const float ox1 = maxX + 1500.0f, oz1 = maxZ + 1500.0f;
+    buildGrid(ox0, oz0, ox1, iz0, 80.0f, -0.3f);   // 北
+    buildGrid(ox0, iz1, ox1, oz1, 80.0f, -0.3f);   // 南
+    buildGrid(ox0, iz0, ix0, iz1, 80.0f, -0.3f);   // 西
+    buildGrid(ix1, iz0, ox1, iz1, 80.0f, -0.3f);   // 東
     return mesh;
 }
 
