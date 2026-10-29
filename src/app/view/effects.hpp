@@ -33,6 +33,14 @@ struct TrailPoint {
 
 // タイヤ痕の 1 区間 (片輪が連続して滑った通過帯)。
 // from → to を結ぶ帯として描く。age が寿命に近づくと路面色へ溶けて消える。
+// 火花 1 粒。壁との接触点から飛び、重力で落ちて短時間で消える。
+struct Spark {
+    Vec3 pos;     // 現在位置
+    Vec3 vel;     // 速度
+    float age;    // 経過秒
+    float life;   // 寿命秒 (0.3〜0.7)
+};
+
 struct SkidMark {
     Vec3 from;         // 区間の始点 (後輪の接地位置)
     Vec3 to;           // 区間の終点
@@ -50,14 +58,19 @@ public:
     void drawSmoke(IRenderer& renderer, const Orbit& camera) const;
     void drawTrails(IRenderer& renderer) const;
     void drawMarks(IRenderer& renderer) const;  // タイヤ痕 (車より先に描く)
+    void drawSparks(IRenderer& renderer, const Orbit& camera) const;  // 火花
     // テスト・診断用: 現在残っているタイヤ痕の区間数。
     int markCount() const { return static_cast<int>(marks_.size()); }
+    int sparkCount() const { return static_cast<int>(sparks_.size()); }  // 検証用
 
 private:
     // テールランプのワールド位置 (side は -1 左 / +1 右)。
     Vec3 lampWorldPos(const Car& car, float side) const;
 
     // --- タイヤ煙 ---
+    std::vector<Spark> sparks_;     // 火花の粒一覧
+    float sparkAcc_ = 0;            // 擦り火花の発生端数
+    unsigned sparkSeed_ = 777;      // 火花の乱数種
     std::vector<SmokePuff> smoke_;  // 生きている煙の粒
     float smokeAcc_ = 0;            // 発生レートの端数アキュムレータ
     unsigned smokeSeed_ = 12345;    // 煙専用の乱数 (他と干渉させない)

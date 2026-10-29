@@ -64,6 +64,10 @@ struct Car {
     float driftHold = 0;     // 入力が一瞬途切れてもドリフトを維持する猶予（秒）
     float driftCalm = 0;     // 滑りが収まって入力も無い状態が続いた時間（秒）
     float driftLockout = 0;  // 壁に強く当たった直後はドリフトに入れない時間（秒）
+    // --- 壁との接触 (火花などの演出用に公開) ---
+    float wallContact = 0;  // このステップで壁に触れていたら 1 (擦り含む)
+    float wallSide = 0;     // 触れた壁の側 (-1 左 / +1 右、横位置の符号)
+    float wallImpact = 0;   // 強い衝突の勢い 0..1 (発生したステップだけ立つ)
     float steerSm = 0;       // 平滑化したステア入力（デジタル入力のカクつき防止）
     float driftScore = 0;    // ドリフトの累計ポイント
     float driftChain = 0;    // いまのドリフトで滑り続けている距離（m）

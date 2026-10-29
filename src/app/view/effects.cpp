@@ -22,6 +22,7 @@ constexpr size_t kMarkMax = 2600;
 }  // namespace
 
 void Effects::clear() {
+    sparks_.clear();
     smoke_.clear();
     trailL_.clear();
     trailR_.clear();
@@ -125,6 +126,53 @@ void Effects::update(const Car& car, float dt) {
         }
     }
     markChain_ = laying;
+    // --- 火花: 既存分を進め、壁との接触から新規を出す ---------------------
+    for (size_t i = 0; i < sparks_.size();) {
+        Spark& s = sparks_[i];
+        s.age += dt;
+        if (s.age >= s.life) {
+            sparks_[i] = sparks_.back();
+            sparks_.pop_back();
+            continue;
+        }
+        s.vel.y -= 6.5f * dt;  // 軽めの重力で放物線を描く
+        s.pos = s.pos + s.vel * dt;
+        ++i;
+    }
+    auto spawnSpark = [&](Vec3 origin, Vec3 baseVel, float spread) {
+        if (sparks_.size() >= 420) return;
+        sparkSeed_ = sparkSeed_ * 1664525u + 1013904223u;
+        float r1 = float((sparkSeed_ >> 16) & 0x3FF) / 1024.0f - 0.5f;
+        sparkSeed_ = sparkSeed_ * 1664525u + 1013904223u;
+        float r2 = float((sparkSeed_ >> 16) & 0x3FF) / 1024.0f - 0.5f;
+        Spark s;
+        s.pos = origin;
+        s.vel = baseVel + Vec3{r1 * spread, r2 * spread + 1.2f, r1 * spread * 0.7f};
+        s.age = 0;
+        s.life = 0.3f + 0.4f * (0.5f + r2);
+        sparks_.push_back(s);
+    };
+    if (car.wallContact > 0 && std::fabs(car.speed) > 3.0f) {
+        Vec3 fw{std::sin(car.yaw), 0, std::cos(car.yaw)};
+        Vec3 rt{fw.z, 0, -fw.x};
+        Vec3 origin{car.x + rt.x * car.wallSide * 0.95f, car.y + 0.32f,
+                    car.z + rt.z * car.wallSide * 0.95f};
+        // 擦り: 連続して細かく散らす。後方と外側へ跳ねる。
+        sparkAcc_ += dt * 110.0f;
+        while (sparkAcc_ >= 1.0f) {
+            sparkAcc_ -= 1.0f;
+            spawnSpark(origin + fw * ((sparkSeed_ >> 8 & 0xFF) / 255.0f - 0.5f) * 2.0f,
+                       fw * -std::fabs(car.speed) * 0.22f + rt * -car.wallSide * 1.6f, 2.6f);
+        }
+        // 強い衝突: 一度に弾ける。
+        if (car.wallImpact > 0.05f) {
+            int burst = int(10.0f + car.wallImpact * 26.0f);
+            for (int i = 0; i < burst; ++i) {
+                spawnSpark(origin, fw * -std::fabs(car.speed) * 0.3f + rt * -car.wallSide * 3.0f,
+                           5.0f);
+            }
+        }
+    }
 }
 
 // テールランプのワールド位置 (光跡の記録用)。車体後端の少し内側・高さ 0.47m。
@@ -138,6 +186,7 @@ Vec3 Effects::lampWorldPos(const Car& car, float side) const {
 }
 
 // 煙をカメラ向きの円盤として描く（八角形のビルボードを毎フレーム構築）。
+
 void Effects::drawSmoke(IRenderer& renderer, const Orbit& camera) const {
     if (smoke_.empty()) {
         return;
@@ -232,4 +281,28 @@ void Effects::drawMarks(IRenderer& renderer) const {
         mesh.addRawTriangle(base, base + 2, base + 3);
     }
     if (!mesh.vertices.empty()) renderer.drawDynamic(mesh);
+}
+
+// 火花を描く。カメラ向きの小さな四角を、熱い橙 (HDR) から暗い赤へ
+// 冷ましながら出す。加算っぽく見えるよう色は明るめに振る。
+void Effects::drawSparks(IRenderer& renderer, const Orbit& camera) const {
+    if (sparks_.empty()) {
+        return;
+    }
+    Vec3 fwd = normalize(camera.look - camera.eye);
+    Vec3 right = normalize(cross(fwd, Vec3{0, 1, 0}));
+    Vec3 up = cross(right, fwd);
+    CpuMesh mesh;
+    for (const Spark& s : sparks_) {
+        float f = s.age / s.life;         // 0=生まれたて → 1=消える直前
+        float size = 0.055f * (1.0f - f * 0.5f);
+        Vec3 hot{3.2f, 2.3f, 0.9f};       // 生まれたての色 (白熱した橙)
+        Vec3 cold{1.3f, 0.30f, 0.04f};    // 冷めた色 (暗い赤)
+        Vec3 col = hot * (1.0f - f) + cold * f;
+        Vec3 r = right * size;
+        Vec3 u = up * size;
+        Vec3 p = s.pos;
+        mesh.addQuad(p - r - u, p + r - u, p + r + u, p - r + u, fwd, col);
+    }
+    renderer.drawDynamic(mesh);
 }

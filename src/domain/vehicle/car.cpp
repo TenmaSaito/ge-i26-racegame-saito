@@ -352,8 +352,12 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
         return;
     }
 
+    wallContact = 0;
+    wallImpact = 0;
     const float wall = track.wallLateral();
     if (std::fabs(ground.lateral) > wall) {
+        wallContact = 1;
+        wallSide = ground.lateral > 0 ? 1.0f : -1.0f;
         float sign = ground.lateral > 0 ? 1.0f : -1.0f;
         float overflow = std::fabs(ground.lateral) - wall;
         x -= ground.rightX * sign * overflow;
@@ -363,6 +367,8 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
         if (facingOut > 0.15f) {
             float cap = 2.0f + 8.0f * (1.0f - facingOut);
             if (speed > cap) {
+                // 削られた速度の大きさを衝突の勢いとして記録する (火花用)。
+                wallImpact = clampf((speed - cap) / 18.0f, 0.0f, 1.0f);
                 speed = cap;
             }
         }

@@ -130,6 +130,16 @@ void RaceScene::frame(double dtSeconds) {
     app.camera().update({viewX_, viewY_, viewZ_}, viewYaw_, viewSlip_, car.driftAmount,
                         app.track(), car.ground.s, float(elapsed));
 
+    // --- 音: タイヤのスリップ音 (仮) ---------------------------------------
+    // ドリフト中はドリフト量、通常時は横滑りが大きいときだけ少し鳴らす。
+    // 速度が低いときは鳴らさない (止まり際のノイズ防止)。
+    {
+        float slip = car.drifting ? clampf(car.driftAmount, 0.0f, 1.0f)
+                                  : clampf((std::fabs(car.lateralSpeed) - 6.0f) / 12.0f, 0.0f, 0.6f);
+        slip *= clampf(std::fabs(car.speed) / 15.0f, 0.0f, 1.0f);
+        app.setSlip(app.paused() ? 0.0f : slip);
+    }
+
     // --- ゴール判定: 規定周回を完了したらリザルトへ -------------------------
     if (app.race().completed() >= kRaceLaps) {
         app.requestScene(SceneId::Result);

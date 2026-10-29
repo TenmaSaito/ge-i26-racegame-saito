@@ -287,4 +287,5 @@ void Game::drawGhost() {
 void Game::drawEffects() {
     effects_.drawSmoke(*renderer_, camera_);
     effects_.drawTrails(*renderer_);
+    effects_.drawSparks(*renderer_, camera_);
 }

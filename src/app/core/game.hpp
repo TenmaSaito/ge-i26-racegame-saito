@@ -16,6 +16,7 @@
 #include "race.hpp"     // Race (周回・計時)
 #include "render.hpp"   // IRenderer (ポート), GpuMesh
 #include "object.hpp"   // ObjectManager (オブジェクト一括管理)
+#include "audio.hpp"    // IAudio (音声ポート)
 #include "ghost.hpp"    // Ghost (前回の自分のゴースト)
 #include "ranking.hpp"  // Ranking (ローカルランキング)
 
@@ -89,6 +90,12 @@ public:
     Hud& hud() { return *hud_; }              // HUD 描画器
     Effects& effects() { return effects_; }   // 演出 (煙・光跡・タイヤ痕)
     Ghost& ghost() { return ghost_; }         // ゴースト (記録と再生)
+    // 音声実装の差し込み (platform が生成して渡す)。無ければ無音。
+    void installAudio(IAudio* audio) { audio_ = audio; }
+    // タイヤスリップ音の強さを音声実装へ伝える (シーンから毎フレーム)。
+    void setSlip(float amount) {
+        if (audio_) audio_->setSlip(amount);
+    }
     const Ghost& ghost() const { return ghost_; }
     // ゴーストを半透明で描く (計測中で保存済みがあるときだけ実働)。
     void drawGhost();
@@ -148,6 +155,7 @@ private:
     TrackLoader trackLoader_;  // コース読み込みの差し込み口
     Ranking ranking_;          // ローカルランキング
     Ghost ghost_;              // ゴースト (最速ラップの記録と再生)
+    IAudio* audio_ = nullptr;  // 音声実装 (所有は platform)
     std::function<void(const std::string&)> rankingSink_;  // ランキング保存口
     Track track_;        // コースデータ
     Car car_;            // 自車

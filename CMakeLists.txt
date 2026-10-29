@@ -40,6 +40,7 @@ add_executable(racegame
     src/platform/entry/main.cpp
     src/platform/system/platform.cpp
     src/platform/render/render.cpp
+    src/platform/audio/audio.cpp
     src/platform/input/input.cpp
     src/platform/test/selftest.cpp
     src/app/core/game.cpp
@@ -68,7 +69,7 @@ target_include_directories(racegame PRIVATE
     src/app/core src/app/scenes src/app/view src/app/race src/app/vehicle
     src/ports
     src/platform/entry src/platform/system src/platform/render
-    src/platform/input src/platform/test)
+    src/platform/input src/platform/test src/platform/audio)
 
 
 set(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")

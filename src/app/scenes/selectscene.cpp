@@ -14,6 +14,7 @@
 #include <cmath>
 
 void SelectScene::enter() {
+    game_.setSlip(0);  // レース外ではスリップ音を止める
     t_ = 0;
     // 現在のコースと車種から選択位置を初期化する (2 回目以降も自然に)。
     course_ = 0;

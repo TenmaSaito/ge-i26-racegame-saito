@@ -209,6 +209,22 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
     if (travelled < 1200.0f) return 3;
     if (maxLat > 30.0f) return 4;
     if (!std::isfinite(car.y)) return 6;
+    // 火花: 壁に擦らせた車を与えると火花が出ること。
+    {
+        Effects fx;
+        Car scrape = car;
+        scrape.wallContact = 1;
+        scrape.wallSide = 1;
+        scrape.wallImpact = 0.5f;
+        scrape.speed = 22.0f;
+        for (int i = 0; i < 30; ++i) {
+            fx.update(scrape, 1.0f / 60.0f);
+        }
+        std::printf("self-test sparks %d\n", fx.sparkCount());
+        if (fx.sparkCount() <= 0) return 14;
+    }
+    // 音声ポート: 実装が無くても setSlip は安全 (Game 側のヌルガード確認は
+    // ここでは行わず、ブラウザ実機で鳴ることを正とする)。
     // タイヤ痕: ドリフト状態の車を直進させると、痕の区間が刻まれること。
     {
         Effects fx;

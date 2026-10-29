@@ -19,6 +19,7 @@
 #include "render.hpp"  // createRenderer / destroyRenderer
 #include "tuning.hpp"  // parseTuning / kTuningStorageKey (外部変更の反映用)
 #include "ranking.hpp"  // kRankingStorageKey
+#include "audio.hpp"     // createAudio / destroyAudio
 
 #include <SDL.h>
 #include <SDL_image.h>
@@ -71,6 +72,7 @@ namespace {
 SDL_Window* gWindow = nullptr;
 SDL_GLContext gGl = nullptr;
 IRenderer* gRenderer = nullptr;  // Game へ差し込んだ描画実装 (所有はこの層)
+IAudio* gAudio = nullptr;        // Game へ差し込んだ音声実装 (所有はこの層)
 
 }  // namespace
 
@@ -251,6 +253,8 @@ bool createWindow(Game& app) {
     input::attachWindow(gWindow);
     // Game の差し込み口に、この層の実装を登録する。
     app.setDebugSink([](const char* text) { sendDebugText(text); });
+    gAudio = createAudio();
+    app.installAudio(gAudio);
     // コース読み込みとランキング保存の差し込み口もここで配線する。
     app.setTrackLoader([](const std::string& stem, Track& track) { return loadTrack(stem, track); });
     app.setRankingSink([](const std::string& text) { saveSetting(kRankingStorageKey, text); });
@@ -267,6 +271,11 @@ bool createWindow(Game& app) {
 }
 
 void destroyWindow(Game& app) {
+    if (gAudio) {
+        destroyAudio(gAudio);
+        gAudio = nullptr;
+        app.installAudio(nullptr);
+    }
     input::detach();
     if (gRenderer) {
         destroyRenderer(gRenderer);
