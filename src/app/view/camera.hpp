@@ -15,6 +15,9 @@ struct Orbit {
     Vec3 eye{0, 8, -12};   // 現在の目の位置 (平滑化済み)
     Vec3 look{0, 0, 0};    // 現在の注視点 (平滑化済み)
     bool ready = false;    // 初期配置が済んだか (最初はブレンドせず即置く)
+    Vec3 eyeOffSm{0, 0, 0};   // 平滑化済みの目オフセット (車位置からの相対)
+    Vec3 lookOffSm{0, 0, 0};  // 平滑化済みの注視点オフセット
+    bool offReady = false;    // オフセットの初期化が済んだか
     int mode = 0;          // 0: CHASE / 1: CLOSE / 2: FAR / 3: DRIVER
 
     // カメラを 1 フレーム進める。

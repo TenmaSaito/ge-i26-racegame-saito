@@ -23,6 +23,7 @@ void Orbit::update(Vec3 carPos, float carYaw, float carSlip, float driftAmount,
         eye = eyePos;
         look = eyePos + fw * 10.0f + Vec3{0, -0.45f, 0};
         ready = true;
+        offReady = false;  // 追跡モードへ戻ったらオフセットを作り直す
         return;
     }
     // 追跡カメラの距離感。疾走感のため既定をぐっと近づけてある
@@ -41,32 +42,38 @@ void Orbit::update(Vec3 carPos, float carYaw, float carSlip, float driftAmount,
     if (under.found && under.xzDist < 30.0f && eyePos.y < under.centerY + 0.8f) {
         eyePos.y = under.centerY + 0.8f;
     }
-    if (!ready) {
+    if (!ready || !offReady) {
+        // 初期配置: オフセットを目標値で初期化して即置く。
+        eyeOffSm = eyePos - carPos;
+        lookOffSm = lookPos - carPos;
         eye = eyePos;
         look = lookPos;
         ready = true;
+        offReady = true;
         return;
     }
     // リセット等で大きく離れていたら即座に置き直す (泳ぎ防止)。
     Vec3 jump = eyePos - eye;
     if (jump.x * jump.x + jump.y * jump.y + jump.z * jump.z > 900.0f) {
+        eyeOffSm = eyePos - carPos;
+        lookOffSm = lookPos - carPos;
         eye = eyePos;
         look = lookPos;
         return;
     }
-    // 追従の平滑化は「絶対位置」ではなく「車から見たオフセット」に掛ける。
-    // 絶対位置で掛けると、補間ポーズの速度が物理ステップ境界で段々に
-    // 変わるたびに遅れ量が揺れて、車が画面の中で前後に泳いで見える。
-    // オフセットなら入力は向き (滑らかに補間される) だけに依存し、
-    // 車の移動そのものは 1:1 で目に伝わるので前後ブレが出ない。
+    // 追従の平滑化は「車から見たオフセット」そのものに掛ける。
+    // 平滑化済みオフセットをメンバに保持し、目標オフセットへ少しずつ
+    // 寄せてから現在の車位置を加算する。こうすると車の移動は 1:1 で
+    // 目に伝わり (遅れが出ない)、向きの変化だけが滑らかになる。
+    // 以前は前フレームの eye から毎回オフセットを逆算していたが、
+    // それは数式上「絶対位置の平滑化」と同一になってしまい、遅れの
+    // 揺れがそのまま車の前後ブレになっていた。
     // 係数 15/s は従来どおり (加速でカメラが置いていかれる感覚の調整値)。
     float blend = 1.0f - std::exp(-dt * 15.0f);
-    Vec3 eyeOff = eye - carPos;
-    Vec3 lookOff = look - carPos;
-    eyeOff = eyeOff + ((eyePos - carPos) - eyeOff) * blend;
-    lookOff = lookOff + ((lookPos - carPos) - lookOff) * blend;
-    eye = carPos + eyeOff;
-    look = carPos + lookOff;
+    eyeOffSm = eyeOffSm + ((eyePos - carPos) - eyeOffSm) * blend;
+    lookOffSm = lookOffSm + ((lookPos - carPos) - lookOffSm) * blend;
+    eye = carPos + eyeOffSm;
+    look = carPos + lookOffSm;
 }
 
 float surfaceHeightAt(const Track& track, Vec3 p, float fallbackY, float preferS) {

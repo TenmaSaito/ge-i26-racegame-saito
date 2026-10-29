@@ -99,11 +99,15 @@ void RaceScene::frame(double dtSeconds) {
         viewYaw_ = car.yaw; viewSlip_ = car.slipAngle;
         viewReady_ = true;
     } else {
-        prevX_ = car.x; prevY_ = car.y; prevZ_ = car.z;
-        prevYaw_ = car.yaw; prevSlip_ = car.slipAngle;
         accumulator_ += elapsed;
         int guard = 0;
         while (accumulator_ >= kFixedStepSec && guard < 8) {
+            // 補間の始点は「最後の物理ステップの直前」のポーズ。
+            // フレーム頭でまとめて退避すると、ステップ 0 回のフレームで
+            // 補間が最新値へ飛び、2 回以上のフレームでは古い位置から
+            // 引いてしまうため、ステップごとにここで退避する。
+            prevX_ = car.x; prevY_ = car.y; prevZ_ = car.z;
+            prevYaw_ = car.yaw; prevSlip_ = car.slipAngle;
             car.update(float(kFixedStepSec), input, app.track());
             if (app.race().launchBoost() > 0 && car.speed < 42.0f) {
                 // ロケットスタート: GO 直後だけ、溜めに応じた加速を上乗せ。

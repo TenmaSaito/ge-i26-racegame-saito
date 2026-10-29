@@ -69,12 +69,17 @@ bool loadWavStereo(const std::string& path, std::vector<int16_t>& out) {
     for (size_t at = 12; at + 8 <= bytes.size();) {
         uint32_t chunkSize = u32(at + 4);
         if (std::memcmp(bytes.data() + at, "fmt ", 4) == 0) {
-            if (u16(at + 8) != 1 || u16(at + 22) == 0) {
+            // fmt チャンクのデータ部 (at + 8 から) の並び: 形式(0) /
+            // チャンネル数(2) / サンプリングレート(4) / バイトレート(8) /
+            // ブロックアライン(12) / ビット深度(14)。ビット深度は
+            // at + 8 + 14 = at + 22 が正しい位置 (以前 at + 34 を見て
+            // おり、波形データの値を読んで常に失敗していた)。
+            if (u16(at + 8) != 1) {
                 return false;  // PCM 以外は扱わない
             }
             channels = u16(at + 10);
             rate = int(u32(at + 12));
-            if (u16(at + 34) != 16) {
+            if (u16(at + 22) != 16) {
                 return false;  // 16bit のみ
             }
         } else if (std::memcmp(bytes.data() + at, "data", 4) == 0) {
