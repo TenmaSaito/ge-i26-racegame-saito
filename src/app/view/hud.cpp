@@ -114,7 +114,7 @@ void Hud::sendDebugToPage(Game& app) {
     std::snprintf(buf, sizeof(buf),
                   "STATE: %s\nSLIP: %.0f DEG\nLAT V: %.1f M/S\nFWD V: %.1f M/S (%.0f KM/H)\n"
                   "AMOUNT: %d %%\nCMD: %.2f\nIN: BTN %d STEER %.2f\nIN: DSTK %.2f MSE %.2f THR %.1f\n"
-                  "PAD %s\nOBJ %d TREE %d HOUSE %d BLD %d\nSCORE %d CHAIN %d M\nAUDIO %s%s",
+                  "PAD %s\nOBJ %d TREE %d HOUSE %d BLD %d\nSCORE %d CHAIN %d M\nAUDIO %s\nDIAG(7/8/9) TILT:%s CAM:%s MIR:%s%s",
                   car.drifting ? "DRIFT" : "GRIP", car.slipAngle * 57.29578f,
                   car.lateralSpeed, car.speed, car.speed * 3.6f,
                   static_cast<int>(std::lround(car.driftAmount * 100.0f)), car.driftCommand,
@@ -122,7 +122,9 @@ void Hud::sendDebugToPage(Game& app) {
                   pad.c_str(),
                   static_cast<int>(app.objects().count()), sc.trees, sc.houses, sc.buildings,
                   static_cast<int>(car.driftScore), static_cast<int>(car.driftChain),
-                  app.audioDiag().c_str(), why);
+                  app.audioDiag().c_str(),
+                  app.diagTilt() ? "ON" : "OFF", app.camera().groundLift ? "ON" : "OFF",
+                  app.diagMirror() ? "ON" : "OFF", why);
     app.sendDebug(buf);
 }
 #endif
@@ -188,6 +190,11 @@ void Hud::drawDriftDebug(Game& app) {
         ty += lineH;
     }
     std::snprintf(line, sizeof(line), "AUDIO: %s", app.audioDiag().c_str());
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
+    std::snprintf(line, sizeof(line), "DIAG(7/8/9) TILT:%s CAM:%s MIR:%s",
+                  app.diagTilt() ? "ON" : "OFF", app.camera().groundLift ? "ON" : "OFF",
+                  app.diagMirror() ? "ON" : "OFF");
     hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
     ty += lineH;
     // ドリフト操作をしているのに入らないときは、理由を出す。

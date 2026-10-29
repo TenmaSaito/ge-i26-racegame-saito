@@ -161,9 +161,13 @@ public:
         std::vector<int16_t> base;
         std::string enginePath = findAsset("engine.wav");
         if (!enginePath.empty() && loadWavStereo(enginePath, base) && base.size() > 8) {
-            const float rates[kEngineSteps] = {0.80f, 0.95f, 1.12f, 1.32f, 1.55f, 1.82f};
+            // 段は等比 (0.80 → 1.90 を 24 分割)。1 段の変化は約 3.8% で、
+            // 半音 (約 5.9%) より小さい。切替時のクロスフェードと合わせて
+            // 「段々」な音程変化を感じさせないための細かさ。
             for (int i = 0; i < kEngineSteps; ++i) {
-                enginePcm_[i] = makePitchVariant(base, rates[i]);
+                float rate = 0.80f * std::pow(1.90f / 0.80f,
+                                              float(i) / float(kEngineSteps - 1));
+                enginePcm_[i] = makePitchVariant(base, rate);
                 engineChunks_[i] = Mix_QuickLoad_RAW(
                     reinterpret_cast<uint8_t*>(enginePcm_[i].data()),
                     uint32_t(enginePcm_[i].size() * sizeof(int16_t)));
@@ -181,7 +185,9 @@ public:
         }
     }
     ~MixerAudio() override {
-        if (engineCh_ >= 0) Mix_HaltChannel(engineCh_);
+        for (int i = 0; i < 2; ++i) {
+            if (engineCh_[i] >= 0) Mix_HaltChannel(engineCh_[i]);
+        }
         if (driftCh_ >= 0) Mix_HaltChannel(driftCh_);
         for (int i = 0; i < kEngineSteps; ++i) {
             if (engineChunks_[i]) Mix_FreeChunk(engineChunks_[i]);
@@ -196,26 +202,41 @@ public:
             return;
         }
         if (rpm <= 0.0f && load <= 0.0f) {
-            if (engineCh_ >= 0 && Mix_Playing(engineCh_)) {
-                Mix_HaltChannel(engineCh_);
+            // 停止の合図 (レース外): 両チャンネルとも止める。
+            for (int i = 0; i < 2; ++i) {
+                if (engineCh_[i] >= 0 && Mix_Playing(engineCh_[i])) {
+                    Mix_HaltChannel(engineCh_[i]);
+                }
             }
             engineStep_ = -1;
             return;
         }
-        int step = int(rpm * float(kEngineSteps));
+        // 段の選択は四捨五入 (境界で小刻みに往復しないよう中心寄せ)。
+        int step = int(rpm * float(kEngineSteps - 1) + 0.5f);
         if (step >= kEngineSteps) step = kEngineSteps - 1;
         if (step < 0) step = 0;
-        if (step != engineStep_ || engineCh_ < 0 || !Mix_Playing(engineCh_)) {
-            if (engineCh_ >= 0 && Mix_Playing(engineCh_)) {
-                Mix_HaltChannel(engineCh_);
+        int cur = engineCh_[engineActive_];
+        bool curPlaying = cur >= 0 && Mix_Playing(cur);
+        if (step != engineStep_ || !curPlaying) {
+            // 段が変わったら、旧チャンネルをフェードアウトしつつ
+            // もう一方のチャンネルで新段をフェードインする (45ms の
+            // クロスフェード)。瞬時切替の「段差感」を消すため。
+            int next = 1 - engineActive_;
+            if (engineCh_[next] >= 0 && Mix_Playing(engineCh_[next])) {
+                Mix_HaltChannel(engineCh_[next]);  // 前のフェード残りを掃除
             }
-            engineCh_ = Mix_PlayChannel(-1, engineChunks_[step], -1);
+            if (curPlaying) {
+                Mix_FadeOutChannel(cur, 45);
+            }
+            engineCh_[next] = Mix_FadeInChannel(-1, engineChunks_[step], -1, 45);
+            engineActive_ = next;
             engineStep_ = step;
+            cur = engineCh_[next];
         }
-        if (engineCh_ >= 0) {
+        if (cur >= 0) {
             int vol = int(26.0f + load * 58.0f + rpm * 36.0f);
             if (vol > 118) vol = 118;
-            Mix_Volume(engineCh_, vol);
+            Mix_Volume(cur, vol);
         }
     }
 
@@ -224,7 +245,8 @@ public:
         char buf[96];
         std::snprintf(buf, sizeof(buf), "ENG %s%s DRIFT %s",
                       engineChunks_[0] ? "OK" : "NG",
-                      (engineCh_ >= 0 && Mix_Playing(engineCh_)) ? "+PLAY" : "",
+                      ((engineCh_[0] >= 0 && Mix_Playing(engineCh_[0])) ||
+                       (engineCh_[1] >= 0 && Mix_Playing(engineCh_[1]))) ? "+PLAY" : "",
                       drift_ ? "OK" : "NG");
         return buf;
     }
@@ -251,12 +273,13 @@ public:
     }
 
 private:
-    static constexpr int kEngineSteps = 6;             // ピッチの段数
+    static constexpr int kEngineSteps = 24;            // ピッチの段数
     std::vector<int16_t> enginePcm_[kEngineSteps];     // 段ごとの波形 (保持が必須)
     Mix_Chunk* engineChunks_[kEngineSteps] = {};       // 段ごとの再生チャンク
     std::vector<int16_t> driftPcm_;                    // ドリフト音のループ波形 (保持が必須)
     Mix_Chunk* drift_ = nullptr;                       // ドリフト音
-    int engineCh_ = -1;                                // エンジン再生チャンネル
+    int engineCh_[2] = {-1, -1};                       // エンジン再生チャンネル (クロスフェード用に 2 本)
+    int engineActive_ = 0;                             // 現在アクティブな側 (0/1)
     int driftCh_ = -1;                                 // ドリフト再生チャンネル
     int engineStep_ = -1;                              // 現在の段
 };

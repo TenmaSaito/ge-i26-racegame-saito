@@ -19,6 +19,7 @@ struct Orbit {
     Vec3 lookOffSm{0, 0, 0};  // 平滑化済みの注視点オフセット
     bool offReady = false;    // オフセットの初期化が済んだか
     int mode = 0;          // 0: CHASE / 1: CLOSE / 2: FAR / 3: DRIVER
+    bool groundLift = true;  // 診断 (8 キー): 地面めり込み補正の ON/OFF
 
     // カメラを 1 フレーム進める。
     // carPos/carYaw/carSlip は描画用に補間された車のポーズ、

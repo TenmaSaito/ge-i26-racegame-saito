@@ -95,6 +95,11 @@ public:
     Ghost& ghost() { return ghost_; }         // ゴースト (記録と再生)
     // 音声実装の差し込み (platform が生成して渡す)。無ければ無音。
     void installAudio(IAudio* audio) { audio_ = audio; }
+    // 揺れ切り分け用の診断フラグ (7/9 キーで切替、既定は全部 ON = 通常動作)。
+    bool diagTilt() const { return diagTilt_; }
+    void setDiagTilt(bool on) { diagTilt_ = on; }
+    bool diagMirror() const { return diagMirror_; }
+    void setDiagMirror(bool on) { diagMirror_ = on; }
     // タイヤスリップ音の強さを音声実装へ伝える (シーンから毎フレーム)。
     void setSlip(float amount) {
         if (audio_) audio_->setSlip(amount);
@@ -170,6 +175,8 @@ private:
     TrackLoader trackLoader_;  // コース読み込みの差し込み口
     Ranking ranking_;          // ローカルランキング
     Ghost ghost_;              // ゴースト (最速ラップの記録と再生)
+    bool diagTilt_ = true;     // 診断: 車体の傾きを適用するか
+    bool diagMirror_ = true;   // 診断: バックミラーを描くか
     IAudio* audio_ = nullptr;  // 音声実装 (所有は platform)
     std::function<void(const std::string&)> rankingSink_;  // ランキング保存口
     Track track_;        // コースデータ

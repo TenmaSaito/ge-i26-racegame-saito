@@ -39,7 +39,7 @@ void Orbit::update(Vec3 carPos, float carYaw, float carSlip, float driftAmount,
     Vec3 lookPos = carPos + forward * ahead[mode] + Vec3{0, 1.15f, 0};
     // カメラが地面にめり込まないよう、真下の路面より低ければ持ち上げる。
     TrackPose under = track.query(eyePos.x, eyePos.z, carPos.y, groundS);
-    if (under.found && under.xzDist < 30.0f && eyePos.y < under.centerY + 0.8f) {
+    if (groundLift && under.found && under.xzDist < 30.0f && eyePos.y < under.centerY + 0.8f) {
         eyePos.y = under.centerY + 0.8f;
     }
     if (!ready || !offReady) {

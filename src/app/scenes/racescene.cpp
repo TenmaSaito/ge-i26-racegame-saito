@@ -74,6 +74,10 @@ void RaceScene::frame(double dtSeconds) {
     }
     if (ui.helpToggle) app.setShowHelp(!app.showHelp());
     if (ui.debugToggle) app.setShowDriftDebug(!app.showDriftDebug());
+    // 揺れ切り分け診断 (7/8/9 キー): 傾き・カメラ地面補正・ミラーを個別に切る。
+    if (ui.diagTilt) app.setDiagTilt(!app.diagTilt());
+    if (ui.diagCam) app.camera().groundLift = !app.camera().groundLift;
+    if (ui.diagMirror) app.setDiagMirror(!app.diagMirror());
     // 車種 (1/2/3) は選択画面でのみ変更する。レース中の誤操作で
     // 特性が突然変わらないように、ここでは受け付けない。
 
@@ -289,6 +293,8 @@ void RaceScene::frame(double dtSeconds) {
     app.drawWorld({viewX_, viewY_, viewZ_}, viewYaw_);
     app.drawGhost();
     app.drawEffects();
-    app.drawMirror({viewX_, viewY_, viewZ_}, viewYaw_);  // 上部の後方カメラ
+    if (app.diagMirror()) {
+        app.drawMirror({viewX_, viewY_, viewZ_}, viewYaw_);  // 上部の後方カメラ
+    }
     app.hud().draw(app);
 }

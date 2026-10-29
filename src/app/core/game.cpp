@@ -256,7 +256,9 @@ void Game::drawWorld(Vec3 carPos, float carYaw) {
     }
     Car viewCar = car_;
     viewCar.x = carPos.x; viewCar.y = carPos.y; viewCar.z = carPos.z; viewCar.yaw = carYaw;
-    Mat4 model = carModelMatrix(viewCar, bodyPitchSm_, bodyRollSm_);
+    // 診断 (7 キー): 傾きを切ると路面平面からの pitch/roll を無効化できる。
+    Mat4 model = carModelMatrix(viewCar, diagTilt_ ? bodyPitchSm_ : 0.0f,
+                                diagTilt_ ? bodyRollSm_ : 0.0f);
     model = mul(translation(0, 0.05f, 0), model);  // 平面に這わせた際の角のめり込み防止
     if (camera_.mode == 3) {
         renderer_->draw(nose_, model);

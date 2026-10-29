@@ -36,6 +36,9 @@ struct UiActions {
     bool helpToggle = false;    // H キー
     bool debugToggle = false;   // B キー
     bool tuningToggle = false;  // T キー
+    bool diagTilt = false;      // 7 キー (診断: 車体の傾き ON/OFF)
+    bool diagCam = false;       // 8 キー (診断: カメラの地面補正 ON/OFF)
+    bool diagMirror = false;    // 9 キー (診断: バックミラー ON/OFF)
     int carSpec = -1;           // 1/2/3 キー (0/1/2、無ければ -1)
     int tuneSelect = 0;         // 調整パネル: 項目移動 (-1 / +1)
     float tuneAdjust = 0.0f;    // 調整パネル: 値の増減方向×倍率 (Shift で 5 倍)

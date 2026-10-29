@@ -176,6 +176,9 @@ UiActions pollUi(bool tuningOpen) {
                 else if (code == SDL_SCANCODE_1) ui.carSpec = 0;
                 else if (code == SDL_SCANCODE_2) ui.carSpec = 1;
                 else if (code == SDL_SCANCODE_3) ui.carSpec = 2;
+                else if (code == SDL_SCANCODE_7) ui.diagTilt = true;
+                else if (code == SDL_SCANCODE_8) ui.diagCam = true;
+                else if (code == SDL_SCANCODE_9) ui.diagMirror = true;
             }
         } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
             openPad();
