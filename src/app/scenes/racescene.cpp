@@ -22,8 +22,20 @@ constexpr double kMaxFrameSec = 0.25;
 
 void RaceScene::enter() {
     game_.resetRace();
+    // 補間の始点と描画ポーズを、リセット直後の車の位置へ同期する。
+    // 同期しないと、初回フレームで物理が進まなかった場合に、前回の
+    // レースの残り座標やゼロ座標から補間が始まり、開始直後の表示が
+    // 跳ぶ。カメラ用の平滑化値と蓄積時間もここで初期化する。
+    const Car& car = game_.car();
+    prevX_ = viewX_ = car.x;
+    prevY_ = viewY_ = car.y;
+    prevZ_ = viewZ_ = car.z;
+    prevYaw_ = viewYaw_ = car.yaw;
+    prevSlip_ = viewSlip_ = car.slipAngle;
+    camSlip_ = car.slipAngle;
+    camAmount_ = car.driftAmount;
     accumulator_ = 0;
-    viewReady_ = false;
+    viewReady_ = true;
     game_.setPaused(false);
     game_.setShowTuning(false);
 }
@@ -83,6 +95,18 @@ void RaceScene::frame(double dtSeconds) {
     if (padPulse.camera) app.camera().cycle(3);
     if (reset) {
         app.resetRace();
+        // リセット直後も補間の始点と描画ポーズを車へ同期する
+        // (enter() と同じ理由。古い座標からの補間で表示が跳ぶのを防ぐ)。
+        const Car& rc = app.car();
+        prevX_ = viewX_ = rc.x;
+        prevY_ = viewY_ = rc.y;
+        prevZ_ = viewZ_ = rc.z;
+        prevYaw_ = viewYaw_ = rc.yaw;
+        prevSlip_ = viewSlip_ = rc.slipAngle;
+        camSlip_ = rc.slipAngle;
+        camAmount_ = rc.driftAmount;
+        accumulator_ = 0;
+        viewReady_ = true;
     }
 
     // 経過時間の整形: 上限で頭打ちし、FPS は Game 側で平滑化する。
