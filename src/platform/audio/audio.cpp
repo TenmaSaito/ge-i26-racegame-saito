@@ -185,9 +185,7 @@ public:
         }
     }
     ~MixerAudio() override {
-        for (int i = 0; i < 2; ++i) {
-            if (engineCh_[i] >= 0) Mix_HaltChannel(engineCh_[i]);
-        }
+        if (engineCh_ >= 0) Mix_HaltChannel(engineCh_);
         if (driftCh_ >= 0) Mix_HaltChannel(driftCh_);
         for (int i = 0; i < kEngineSteps; ++i) {
             if (engineChunks_[i]) Mix_FreeChunk(engineChunks_[i]);
@@ -202,41 +200,41 @@ public:
             return;
         }
         if (rpm <= 0.0f && load <= 0.0f) {
-            // 停止の合図 (レース外): 両チャンネルとも止める。
-            for (int i = 0; i < 2; ++i) {
-                if (engineCh_[i] >= 0 && Mix_Playing(engineCh_[i])) {
-                    Mix_HaltChannel(engineCh_[i]);
-                }
+            // 停止の合図 (レース外)。
+            if (engineCh_ >= 0 && Mix_Playing(engineCh_)) {
+                Mix_HaltChannel(engineCh_);
             }
             engineStep_ = -1;
+            rpmSm_ = 0.0f;
+            dwell_ = 0;
             return;
         }
-        // 段の選択は四捨五入 (境界で小刻みに往復しないよう中心寄せ)。
-        int step = int(rpm * float(kEngineSteps - 1) + 0.5f);
+        // rpm を平滑化してから段を選ぶ。速度の細かい揺れで段が境界を
+        // 行き来すると、切替のたびに再生が頭出しされて音が途切れる
+        // ため。24 段の細かさと合わせ、切替は「2 段以上の変化」か
+        // 「同じ段がしばらく続いたとき」だけに限る (滞留条件)。
+        rpmSm_ += (rpm - rpmSm_) * 0.25f;
+        int step = int(rpmSm_ * float(kEngineSteps - 1) + 0.5f);
         if (step >= kEngineSteps) step = kEngineSteps - 1;
         if (step < 0) step = 0;
-        int cur = engineCh_[engineActive_];
-        bool curPlaying = cur >= 0 && Mix_Playing(cur);
-        if (step != engineStep_ || !curPlaying) {
-            // 段が変わったら、旧チャンネルをフェードアウトしつつ
-            // もう一方のチャンネルで新段をフェードインする (45ms の
-            // クロスフェード)。瞬時切替の「段差感」を消すため。
-            int next = 1 - engineActive_;
-            if (engineCh_[next] >= 0 && Mix_Playing(engineCh_[next])) {
-                Mix_HaltChannel(engineCh_[next]);  // 前のフェード残りを掃除
+        ++dwell_;
+        bool playing = engineCh_ >= 0 && Mix_Playing(engineCh_);
+        if (step != engineStep_ || !playing) {
+            int dist = step - engineStep_;
+            if (dist < 0) dist = -dist;
+            if (engineStep_ < 0 || !playing || dist >= 2 || dwell_ >= 3) {
+                if (playing) {
+                    Mix_HaltChannel(engineCh_);
+                }
+                engineCh_ = Mix_PlayChannel(-1, engineChunks_[step], -1);
+                engineStep_ = step;
+                dwell_ = 0;
             }
-            if (curPlaying) {
-                Mix_FadeOutChannel(cur, 45);
-            }
-            engineCh_[next] = Mix_FadeInChannel(-1, engineChunks_[step], -1, 45);
-            engineActive_ = next;
-            engineStep_ = step;
-            cur = engineCh_[next];
         }
-        if (cur >= 0) {
+        if (engineCh_ >= 0) {
             int vol = int(26.0f + load * 58.0f + rpm * 36.0f);
             if (vol > 118) vol = 118;
-            Mix_Volume(cur, vol);
+            Mix_Volume(engineCh_, vol);
         }
     }
 
@@ -245,8 +243,7 @@ public:
         char buf[96];
         std::snprintf(buf, sizeof(buf), "ENG %s%s DRIFT %s",
                       engineChunks_[0] ? "OK" : "NG",
-                      ((engineCh_[0] >= 0 && Mix_Playing(engineCh_[0])) ||
-                       (engineCh_[1] >= 0 && Mix_Playing(engineCh_[1]))) ? "+PLAY" : "",
+                      (engineCh_ >= 0 && Mix_Playing(engineCh_)) ? "+PLAY" : "",
                       drift_ ? "OK" : "NG");
         return buf;
     }
@@ -259,6 +256,13 @@ public:
         }
         bool playing = driftCh_ >= 0 && Mix_Playing(driftCh_);
         if (amount >= 0.05f) {
+            // フェードアウト中にドリフトへ再突入すると、フェードが
+            // 完了した時点で音が消えてしまう。その場合は止めて
+            // 鳴らし直す (フェードアウトを取り消す API はないため)。
+            if (playing && Mix_FadingChannel(driftCh_) == MIX_FADING_OUT) {
+                Mix_HaltChannel(driftCh_);
+                playing = false;
+            }
             if (!playing) {
                 driftCh_ = Mix_PlayChannel(-1, drift_, -1);  // 無限ループ
             }
@@ -278,8 +282,9 @@ private:
     Mix_Chunk* engineChunks_[kEngineSteps] = {};       // 段ごとの再生チャンク
     std::vector<int16_t> driftPcm_;                    // ドリフト音のループ波形 (保持が必須)
     Mix_Chunk* drift_ = nullptr;                       // ドリフト音
-    int engineCh_[2] = {-1, -1};                       // エンジン再生チャンネル (クロスフェード用に 2 本)
-    int engineActive_ = 0;                             // 現在アクティブな側 (0/1)
+    int engineCh_ = -1;                                // エンジン再生チャンネル
+    float rpmSm_ = 0.0f;                               // 段選択用の平滑化済み rpm
+    int dwell_ = 0;                                    // 最後の段切替からの呼び出し回数
     int driftCh_ = -1;                                 // ドリフト再生チャンネル
     int engineStep_ = -1;                              // 現在の段
 };
