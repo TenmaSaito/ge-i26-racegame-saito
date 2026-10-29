@@ -12,6 +12,7 @@
 #include "game.hpp"
 #include "input.hpp"  // input::padStatus (パッド認識状態)
 #include "scene.hpp"   // kRaceLaps
+#include "scenery.hpp"  // countScenery (オブジェクト内訳)
 #include "render.hpp"
 #include "tuning.hpp"
 
@@ -108,16 +109,18 @@ void Hud::sendDebugToPage(Game& app) {
         }
     }
     std::string pad = input::padStatus();  // パッド認識状態 (無ければ NONE...)
+    SceneryCounts sc = countScenery(app.objects());  // オブジェクトの種類別内訳
     char buf[768];
     std::snprintf(buf, sizeof(buf),
                   "STATE: %s\nSLIP: %.0f DEG\nLAT V: %.1f M/S\nFWD V: %.1f M/S (%.0f KM/H)\n"
                   "AMOUNT: %d %%\nCMD: %.2f\nIN: BTN %d STEER %.2f\nIN: DSTK %.2f MSE %.2f THR %.1f\n"
-                  "PAD %s\nSCORE %d CHAIN %d M%s",
+                  "PAD %s\nOBJ %d TREE %d HOUSE %d BLD %d\nSCORE %d CHAIN %d M%s",
                   car.drifting ? "DRIFT" : "GRIP", car.slipAngle * 57.29578f,
                   car.lateralSpeed, car.speed, car.speed * 3.6f,
                   static_cast<int>(std::lround(car.driftAmount * 100.0f)), car.driftCommand,
                   in.drift ? 1 : 0, in.steer, in.driftSteer, in.mouseDrift, in.throttle,
                   pad.c_str(),
+                  static_cast<int>(app.objects().count()), sc.trees, sc.houses, sc.buildings,
                   static_cast<int>(car.driftScore), static_cast<int>(car.driftChain), why);
     app.sendDebug(buf);
 }
@@ -131,7 +134,7 @@ void Hud::drawDriftDebug(Game& app) {
     const DriveInput& in = app.lastInput();
     const float pw = 336.0f;
     const float lineH = 21.0f;
-    const int lines = 12;
+    const int lines = 13;
     const float ph = 14.0f + lineH * float(lines);
     const float px = float(hud.width()) - pw - 16.0f;
     const float py = 52.0f;
@@ -176,6 +179,13 @@ void Hud::drawDriftDebug(Game& app) {
     std::snprintf(line, sizeof(line), "PAD: %s", input::padStatus().c_str());
     hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
     ty += lineH;
+    {
+        SceneryCounts sc = countScenery(app.objects());
+        std::snprintf(line, sizeof(line), "OBJ: %d T%d H%d B%d",
+                      static_cast<int>(app.objects().count()), sc.trees, sc.houses, sc.buildings);
+        hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+        ty += lineH;
+    }
     // ドリフト操作をしているのに入らないときは、理由を出す。
     const char* why = "";
     bool trying = in.drift || std::fabs(in.driftSteer) > 0.45f;

@@ -5,6 +5,7 @@
 #include "resultscene.hpp"
 
 #include "game.hpp"
+#include "carobject.hpp"  // CarObject (Find の結果)
 #include "hud.hpp"  // Hud (drawTitle / drawResult / draw)
 #include "input.hpp"
 
@@ -33,7 +34,9 @@ void ResultScene::frame(double dt) {
     t_ += dt;
 
     // 背景カメラ: ゴール地点の車の周りをゆっくり回す (タイトルと同じ動き)。
-    const Car& car = game_.car();
+    // プレイヤー車は名前で引く (オブジェクトの一括管理から検索)。
+    const CarObject* player = static_cast<const CarObject*>(game_.objects().find("Player"));
+    const Car& car = player ? player->car() : game_.car();
     float ang = float(t_) * 0.22f;
     Orbit& camera = game_.camera();
     camera.eye = {car.x + std::sin(ang) * 8.0f, car.y + 2.4f, car.z + std::cos(ang) * 8.0f};

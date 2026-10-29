@@ -11,6 +11,7 @@
 #include "game.hpp"
 
 #include "carmodel.hpp"  // buildCarNose / buildTailLamps
+#include "carobject.hpp"  // CarObject ("Player" として登録)
 #include "hud.hpp"       // Hud
 #include "racescene.hpp"    // RaceScene
 #include "resultscene.hpp"  // ResultScene
@@ -21,15 +22,6 @@
 
 #include <cmath>
 #include <utility>
-
-namespace {
-// 物理の固定ステップ (秒)。表示レートによらず挙動を一定に保つため、
-// 物理だけは 60Hz 固定で進め、描画側は補間でつなぐ。
-constexpr double kFixedStepSec = 1.0 / 60.0;
-// 1 フレームの経過時間の上限 (秒)。タブ復帰などの大きな隙間で
-// 物理が暴走しないよう、この値で頭打ちにする。
-constexpr double kMaxFrameSec = 0.25;
-}  // namespace
 
 Game::Game(std::string title, Track track)
     : title_(std::move(title)), track_(std::move(track)), hud_(std::make_unique<Hud>()) {}
@@ -77,7 +69,9 @@ void Game::init() {
     {
         // 景観 (木・建物・ガードレール) は SceneryBuilder がチャンク分割して構築。
         SceneryBuilder builder(track_);
-        for (SceneryChunk& chunk : builder.build()) {
+        // 景観は 1 件ずつオブジェクトとしてマネージャへ登録され、
+        // チャンクメッシュはその実体一覧から焼き込む。
+        for (SceneryChunk& chunk : builder.build(objects_)) {
             scenery_.push_back(renderer_->upload(chunk.mesh));
             sceneryCenters_.push_back(chunk.center);
         }
@@ -110,6 +104,8 @@ void Game::init() {
     wheel_ = renderer_->upload(wheel);
     shadow_ = renderer_->upload(shadow);
     car_.reset(track_);
+    // プレイヤー車もオブジェクトとして登録する (Find("Player") で引ける)。
+    objects_.add<CarObject>("Player", car_);
     switchScene(SceneId::Title);  // 起動直後はタイトルから
 }
 
@@ -130,6 +126,8 @@ void Game::switchScene(SceneId id) {
 // 1 フレームの進行。切り替え予約があればフレームの頭で切り替え、
 // あとは現在のシーンに委譲する (Game 自身は段取りを持たない)。
 void Game::frame(double dtSeconds) {
+    // オブジェクトの一括更新 (動く実体が増えたらここで一斉に進む)。
+    objects_.updateAll(float(dtSeconds));
     if (hasPendingScene_) {
         hasPendingScene_ = false;
         switchScene(pendingScene_);

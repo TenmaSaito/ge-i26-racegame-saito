@@ -1,6 +1,7 @@
 #pragma once
 
 #include "meshbuild.hpp"
+#include "object.hpp"  // IObject / ObjectManager (一括管理)
 #include "track.hpp"
 
 #include <vector>
@@ -39,6 +40,41 @@ public:
     void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const override;
 };
 
+// 景観の種類。インスタンスの判別と、焼き込み時の形状生成器の選択に使う。
+enum class SceneryKind { Tree, Building, House };
+
+// 景観 1 件分の「実体」(IObject)。木・家・建物を個別の変数や配列で
+// バラバラに持たず、ObjectManager に登録して一括管理するための単位。
+// 位置・大きさ・バリエーション種・所属チャンクだけを持ち、頂点化は
+// bake() が種類に応じた生成器 (TreeObject 等) へ委譲する。
+class SceneryInstance : public IObject {
+public:
+    SceneryInstance(SceneryKind kind, Vec3 pos, float scale, unsigned seed, int chunk)
+        : kind_(kind), pos_(pos), scale_(scale), seed_(seed), chunk_(chunk) {}
+
+    SceneryKind kind() const { return kind_; }  // 種類 (木/建物/家)
+    Vec3 pos() const { return pos_; }           // 接地位置
+    int chunk() const { return chunk_; }        // 所属チャンク番号
+
+    // 自分の形状をチャンクのメッシュへ焼き込む。groundY は基礎の到達先。
+    void bake(CpuMesh& mesh, float groundY) const;
+
+private:
+    SceneryKind kind_;   // 種類
+    Vec3 pos_;           // 接地位置 (base)
+    float scale_;        // 大きさ倍率
+    unsigned seed_;      // バリエーション決定用のハッシュ
+    int chunk_;          // 焼き込み先チャンクの番号
+};
+
+// 種類ごとの個数 (デバッグ表示用)。
+struct SceneryCounts {
+    int trees = 0;
+    int houses = 0;
+    int buildings = 0;
+};
+SceneryCounts countScenery(const ObjectManager& objects);
+
 // 景観メッシュのひとかたまり（チャンク）。中心は描画カリング用。
 struct SceneryChunk {
     CpuMesh mesh;
@@ -52,7 +88,9 @@ class SceneryBuilder {
 public:
     explicit SceneryBuilder(const Track& track) : track_(track) {}
 
-    std::vector<SceneryChunk> build(int samplesPerChunk = 120) const;
+    // 配置した景観は 1 件ずつ SceneryInstance として objects へ登録し
+    // (一括管理の実体)、その実体からチャンクメッシュを焼き込む。
+    std::vector<SceneryChunk> build(ObjectManager& objects, int samplesPerChunk = 120) const;
     // 背景の山並み（コースをぐるりと囲む稜線リング）。スカイボックス代わり。
     CpuMesh buildBackdrop() const;
 

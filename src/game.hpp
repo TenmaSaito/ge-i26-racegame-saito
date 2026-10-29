@@ -15,6 +15,7 @@
 #include "effects.hpp"  // Effects (煙・光跡・タイヤ痕)
 #include "race.hpp"     // Race (周回・計時)
 #include "render.hpp"   // IRenderer (ポート), GpuMesh
+#include "object.hpp"   // ObjectManager (オブジェクト一括管理)
 #include "scene.hpp"    // IScene / SceneId
 #include "track.hpp"    // Track
 
@@ -66,6 +67,9 @@ public:
     // --- シーンから使う共通サービス -----------------------------------------
     Hud& hud() { return *hud_; }              // HUD 描画器
     Effects& effects() { return effects_; }   // 演出 (煙・光跡・タイヤ痕)
+    // オブジェクトの一括管理 (景観インスタンスと Player が登録される)。
+    ObjectManager& objects() { return objects_; }
+    const ObjectManager& objects() const { return objects_; }
     // レースを初期状態に戻す (車・計時・演出・カメラをまとめて)。
     void resetRace();
     // 現在のチューニング値を差し込み口経由で保存する (シーンからの依頼用)。
@@ -119,6 +123,7 @@ private:
     Race race_;          // 周回・計時
     Orbit camera_;       // カメラ状態
     Effects effects_;    // 煙・光跡・タイヤ痕
+    ObjectManager objects_;         // 全オブジェクトの一括管理 (景観・Player)
     std::unique_ptr<Hud> hud_;      // HUD 描画器 (ミニマップ等の表示状態を持つ)
     std::unique_ptr<IScene> scene_;  // 現在のシーン (タイトル／レース／リザルト)
     SceneId pendingScene_ = SceneId::Title;  // 切り替え予約

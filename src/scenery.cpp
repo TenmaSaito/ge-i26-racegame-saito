@@ -1,5 +1,7 @@
 #include "scenery.hpp"
 
+#include <string>
+
 #include <cmath>
 
 namespace {
@@ -137,7 +139,7 @@ void SceneryBuilder::buildGuardrails(CpuMesh& mesh, int from, int to) const {
     }
 }
 
-std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
+std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samplesPerChunk) const {
     const int n = int(track_.samples.size());
     // 背景の地面（一枚板）の高さ。buildBackdrop と同じ基準 (最低標高 - 4m)
     // より 1m 下まで基礎を伸ばせば、どこから見ても必ず地面に届く。
@@ -150,12 +152,11 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
     std::vector<SceneryChunk> chunks;
     chunks.resize(size_t(chunkCount));
     const float grassOuter = track_.halfWidth + track_.curbWidth + track_.runoff + 0.8f;
-    TreeObject tree;
-    BuildingObject building;
-    HouseObject house;
+    // 第 1 パス: 配置の決定だけを行い、1 件ずつ SceneryInstance として
+    // マネージャへ登録する (名前は種類 + 連番で、Find でも引ける)。
+    int treeNo = 0, buildingNo = 0, houseNo = 0;  // 名前付け用の連番
     for (int i = 0; i < n; ++i) {
         const int ci = i / samplesPerChunk;
-        CpuMesh& mesh = chunks[size_t(ci)].mesh;
         for (int s = -1; s <= 1; s += 2) {
             const float side = float(s);
             const float baseY = edgeY(i, side);
@@ -168,7 +169,8 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                 if (clearOfOtherRoad(pos, 6.0f, baseY, i)) {
                     // 大きさは 0.6〜2.1 倍まで大きく振る（形の個体差は TreeObject 側）。
                     const float scale = 0.6f + float((h >> 16) % 100u) / 100.0f * 1.5f;
-                    tree.build(mesh, pos, scale, h, groundY);
+                    objects.add<SceneryInstance>("Tree#" + std::to_string(treeNo++),
+                                                 SceneryKind::Tree, pos, scale, h, ci);
                 }
             }
             // 建物: 約 110m 間隔の候補から 6 割、芝の外 20〜50m
@@ -177,7 +179,8 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = baseY;
                 if (clearOfOtherRoad(pos, 17.0f, baseY, i)) {
-                    building.build(mesh, pos, 1.0f, h ^ 0x77u, groundY);
+                    objects.add<SceneryInstance>("Building#" + std::to_string(buildingNo++),
+                                                 SceneryKind::Building, pos, 1.0f, h ^ 0x77u, ci);
                 }
             }
             // 住宅街: 約 180m 間隔の候補に、5〜9軒の小さな集落を作る。
@@ -190,15 +193,24 @@ std::vector<SceneryChunk> SceneryBuilder::build(int samplesPerChunk) const {
                     unsigned hh = treeHash(i * 31 + u * 7, side);
                     Vec3 hp{cpos.x + (float((hh >> 8) % 1000u) / 1000.0f - 0.5f) * 46.0f, cbaseY - 0.3f,
                             cpos.z + (float((hh >> 18) % 1000u) / 1000.0f - 0.5f) * 46.0f};
-                    if (clearOfOtherRoad(hp, 12.0f, cbaseY, i)) house.build(mesh, hp, 1.0f, hh, groundY);
+                    if (clearOfOtherRoad(hp, 12.0f, cbaseY, i)) {
+                        objects.add<SceneryInstance>("House#" + std::to_string(houseNo++),
+                                                     SceneryKind::House, hp, 1.0f, hh, ci);
+                    }
                 }
             }
         }
     }
+    // 第 2 パス: 登録済みインスタンスをチャンクごとに集めて焼き込む。
+    // 実体の一覧が唯一の正で、メッシュはそこから作る従属物という関係。
+    const std::vector<SceneryInstance*> instances = objects.findAllOfType<SceneryInstance>();
+    for (SceneryInstance* inst : instances) {
+        inst->bake(chunks[size_t(inst->chunk())].mesh, groundY);
+    }
     for (int c = 0; c < chunkCount; ++c) {
         const int from = c * samplesPerChunk;
         const int to = std::min(n, from + samplesPerChunk);
-        buildGuardrails(chunks[size_t(c)].mesh, from, to);
+        buildGuardrails(chunks[size_t(c)].mesh, from, to);  // レールは線状地物なので実体化しない
         const TrackSample& mid = track_.samples[size_t((from + to) / 2)];
         chunks[size_t(c)].center = {mid.x, mid.y, mid.z};
     }
@@ -282,4 +294,29 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
         mesh.addQuad(b0, b1, p1, p0, n, c);
     }
     return mesh;
+}
+
+// 形状の焼き込み。種類ごとに担当の生成器へ委譲する (生成器は無状態)。
+void SceneryInstance::bake(CpuMesh& mesh, float groundY) const {
+    static const TreeObject kTree;
+    static const BuildingObject kBuilding;
+    static const HouseObject kHouse;
+    switch (kind_) {
+        case SceneryKind::Tree: kTree.build(mesh, pos_, scale_, seed_, groundY); break;
+        case SceneryKind::Building: kBuilding.build(mesh, pos_, scale_, seed_, groundY); break;
+        case SceneryKind::House: kHouse.build(mesh, pos_, scale_, seed_, groundY); break;
+    }
+}
+
+// 種類ごとの個数を数える (マネージャから型でまとめて取って振り分ける)。
+SceneryCounts countScenery(const ObjectManager& objects) {
+    SceneryCounts counts;
+    for (const SceneryInstance* inst : objects.findAllOfType<SceneryInstance>()) {
+        switch (inst->kind()) {
+            case SceneryKind::Tree: counts.trees += 1; break;
+            case SceneryKind::Building: counts.buildings += 1; break;
+            case SceneryKind::House: counts.houses += 1; break;
+        }
+    }
+    return counts;
 }

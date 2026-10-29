@@ -8,6 +8,7 @@
 
 #include "car.hpp"
 #include "effects.hpp"  // タイヤ痕の生成テスト用
+#include "object.hpp"   // ObjectManager の検証用
 #include "track.hpp"
 
 #include <cmath>
@@ -237,6 +238,29 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         if (fall.airborne) return 8;             // 3 秒経っても落ちてこない
         if (peak - groundY < 0.5f) return 9;      // 放物線になっていない
         if (std::fabs(fall.y - groundY) > 0.05f) return 10;  // 着地位置がずれている
+    }
+    // オブジェクト管理: 登録・名前検索・型検索・一括更新・破棄ができること。
+    {
+        struct Probe : IObject {
+            int updates = 0;
+            void update(float) override { ++updates; }
+        };
+        struct Other : IObject {};
+        ObjectManager mgr;
+        Probe& a = mgr.add<Probe>("Alpha");
+        mgr.add<Probe>("Beta");
+        mgr.add<Other>("Gamma");
+        bool okFind = mgr.find("Alpha") == &a && mgr.find("Nope") == nullptr;
+        bool okType = mgr.countOfType<Probe>() == 2 && mgr.findAllOfType<Probe>().size() == 2 &&
+                      mgr.findOfType<Other>() != nullptr;
+        mgr.updateAll(0.016f);
+        bool okUpdate = a.updates == 1;
+        mgr.destroy("Beta");
+        mgr.updateAll(0.016f);  // 破棄の掃除は一括更新のタイミングで行われる
+        bool okDestroy = mgr.count() == 2 && mgr.find("Beta") == nullptr;
+        std::printf("self-test objects find %d type %d update %d destroy %d\n",
+                    okFind ? 1 : 0, okType ? 1 : 0, okUpdate ? 1 : 0, okDestroy ? 1 : 0);
+        if (!okFind || !okType || !okUpdate || !okDestroy) return 11;
     }
     // タイヤ痕: ドリフト状態の車を直進させると、痕の区間が刻まれること。
     {
