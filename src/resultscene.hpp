@@ -19,4 +19,5 @@ public:
 private:
     Game& game_;   // 共有の置き場 (タイムは Game の Race が保持)
     double t_ = 0; // シーン経過秒 (カメラの周回と文字の点滅用)
+    int rank_ = -1;  // 今回の順位 (0 始まり、圏外は -1)。enter で登録する
 };

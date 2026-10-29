@@ -11,9 +11,22 @@
 // シーンの識別子。Game::requestScene に渡す。
 enum class SceneId {
     Title,   // タイトル (アトラクトカメラ＋スタート待ち)
+    Select,  // ステージ選択 + 車種選択
     Race,    // レース本編
     Result,  // リザルト (タイム表示)
 };
+
+// 選択できるコースの一覧 (stem はファイル名と保存キーを兼ねる)。
+struct CourseInfo {
+    const char* stem;  // コースファイルの stem (例: "suzuka")
+    const char* name;  // 表示名 (例: "Suzuka Circuit")
+};
+inline constexpr CourseInfo kCourses[] = {
+    {"suzuka", "Suzuka Circuit"},
+    {"flow", "Flow Circuit"},
+    {"coast", "Coast Circuit"},
+};
+inline constexpr int kCourseCount = 3;
 
 // レースの周回数 (この周回数を完了したらリザルトへ)。
 inline constexpr int kRaceLaps = 3;

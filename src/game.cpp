@@ -14,6 +14,7 @@
 #include "carobject.hpp"  // CarObject ("Player" として登録)
 #include "hud.hpp"       // Hud
 #include "racescene.hpp"    // RaceScene
+#include "selectscene.hpp"  // SelectScene
 #include "resultscene.hpp"  // ResultScene
 #include "titlescene.hpp"   // TitleScene
 #include "input.hpp"     // input::pollUi / sampleDrive (ポート)
@@ -23,8 +24,8 @@
 #include <cmath>
 #include <utility>
 
-Game::Game(std::string title, Track track)
-    : title_(std::move(title)), track_(std::move(track)), hud_(std::make_unique<Hud>()) {}
+Game::Game(std::string initialStem)
+    : initialStem_(std::move(initialStem)), hud_(std::make_unique<Hud>()) {}
 
 Game::~Game() = default;
 
@@ -35,6 +36,7 @@ void Game::resetRace() {
     race_.reset();
     camera_.ready = false;  // カメラは次のフレームで即座に置き直す
     effects_.clear();       // 煙・光跡・タイヤ痕も残さない
+    ghost_.discard();       // 記録中ラップは捨てる (保存済みゴーストは残す)
 }
 
 // 現在のチューニング値を保存する。実務は差し込み先 (platform) の担当で、
@@ -58,25 +60,10 @@ void Game::applyCarSpec(int index) {
     saveTuningNow();
 }
 
-// 初期化: コースに合わせたメッシュを構築し、描画実装へアップロードする。
-// 景観と路面はチャンク (区間) 単位で持ち、描画時に距離カリングする。
+// 初期化: 車まわりのメッシュ (コースに依らない) を作ってアップロードし、
+// 最後に初期コースを読み込んでタイトルへ入る。
 void Game::init() {
-    // 路面チャンクも景観チャンクと同じリストでカリング描画する。
-    for (size_t i = 0; i < track_.visualChunks.size(); ++i) {
-        scenery_.push_back(renderer_->upload(track_.visualChunks[i]));
-        sceneryCenters_.push_back(track_.visualCenters[i]);
-    }
     {
-        // 景観 (木・建物・ガードレール) は SceneryBuilder がチャンク分割して構築。
-        SceneryBuilder builder(track_);
-        // 景観は 1 件ずつオブジェクトとしてマネージャへ登録され、
-        // チャンクメッシュはその実体一覧から焼き込む。
-        for (SceneryChunk& chunk : builder.build(objects_)) {
-            scenery_.push_back(renderer_->upload(chunk.mesh));
-            sceneryCenters_.push_back(chunk.center);
-        }
-        backdrop_ = renderer_->upload(builder.buildBackdrop());
-        {
             CpuMesh noseMesh;
             buildCarNose(noseMesh);
             nose_ = renderer_->upload(noseMesh);
@@ -93,20 +80,75 @@ void Game::init() {
         lampMesh.indices.clear();
         buildTailLamps(lampMesh, {2.6f, 0.22f, 0.20f});
         lampsBright_ = renderer_->upload(lampMesh);
-    }
     CpuMesh body;
     CpuMesh wheel;
     CpuMesh shadow;
     buildCarBody(body);
+    buildCarDetails(body);   // キャノピーや空力部品などの作り込み
     buildCarWheel(wheel);
+    buildWheelDetails(wheel);  // センターハブ
     buildCarShadow(shadow);
     body_ = renderer_->upload(body);
     wheel_ = renderer_->upload(wheel);
     shadow_ = renderer_->upload(shadow);
-    car_.reset(track_);
+    // 初期コースの読み込み (失敗したら既定コースへ落とす)。
+    if (!loadCourse(initialStem_)) {
+        loadCourse("suzuka");
+    }
+    switchScene(SceneId::Title);  // 起動直後はタイトルから
+}
+
+// コースを読み直す。路面・背景・景観メッシュとオブジェクト登録を
+// 丸ごと作り直し、車をスタートへ置き直す。古い GPU メッシュは
+// 差し替えで破棄される (切替は頻繁ではないので明示解放はしない)。
+bool Game::loadCourse(const std::string& stem) {
+    if (!trackLoader_) {
+        return false;
+    }
+    Track track;
+    if (!trackLoader_(stem, track)) {
+        return false;
+    }
+    track_ = std::move(track);
+    courseStem_ = stem;
+    title_ = "Suzuka Circuit";
+    for (int i = 0; i < kCourseCount; ++i) {
+        if (stem == kCourses[i].stem) {
+            title_ = kCourses[i].name;
+        }
+    }
+    // 前コースの景観メッシュとオブジェクト登録を捨ててから作り直す。
+    scenery_.clear();
+    sceneryCenters_.clear();
+    objects_.clear();
+    // 路面チャンクも景観チャンクと同じリストでカリング描画する。
+    for (size_t i = 0; i < track_.visualChunks.size(); ++i) {
+        scenery_.push_back(renderer_->upload(track_.visualChunks[i]));
+        sceneryCenters_.push_back(track_.visualCenters[i]);
+    }
+    SceneryBuilder builder(track_);
+    for (SceneryChunk& chunk : builder.build(objects_)) {
+        scenery_.push_back(renderer_->upload(chunk.mesh));
+        sceneryCenters_.push_back(chunk.center);
+    }
+    backdrop_ = renderer_->upload(builder.buildBackdrop());
+    ghost_.clear();  // コースが変われば前コースのゴーストは意味がない
     // プレイヤー車もオブジェクトとして登録する (Find("Player") で引ける)。
     objects_.add<CarObject>("Player", car_);
-    switchScene(SceneId::Title);  // 起動直後はタイトルから
+    resetRace();
+    return true;
+}
+
+// ゴール結果をランキングへ登録し、保存口へ流す。
+int Game::recordResult() {
+    if (race_.completed() < kRaceLaps || race_.total() <= 0) {
+        return -1;
+    }
+    int rank = ranking_.addResult(courseStem_, race_.total());
+    if (rankingSink_) {
+        rankingSink_(ranking_.serialize());
+    }
+    return rank;
 }
 
 // シーンを実際に切り替える。前シーンの exit を呼んでから新しいシーンを
@@ -117,6 +159,7 @@ void Game::switchScene(SceneId id) {
     }
     switch (id) {
         case SceneId::Title: scene_ = std::make_unique<TitleScene>(*this); break;
+        case SceneId::Select: scene_ = std::make_unique<SelectScene>(*this); break;
         case SceneId::Race: scene_ = std::make_unique<RaceScene>(*this); break;
         case SceneId::Result: scene_ = std::make_unique<ResultScene>(*this); break;
     }
@@ -212,6 +255,30 @@ void Game::drawWorld(Vec3 carPos, float carYaw) {
             Mat4 place = mul(translation(float(side) * wheelX, 0.34f, wheelZ[i]),
                              mul(rotationY(steerForWheel[i]), rotationX(car_.wheelSpin)));
             renderer_->draw(wheel_, mul(model, place));
+        }
+    }
+}
+
+// ゴーストの描画。保存済みゴーストがあり、計測ラップ中のときだけ、
+// 現在のラップ経過時刻に対応するポーズを半透明 (0.42) で描く。
+void Game::drawGhost() {
+    if (!ghost_.hasGhost() || !race_.timing()) {
+        return;
+    }
+    Vec3 pos;
+    float yaw = 0;
+    if (!ghost_.poseAt(race_.lap(), pos, yaw)) {
+        return;
+    }
+    Mat4 model = mul(translation(pos.x, pos.y + 0.05f, pos.z), rotationY(yaw));
+    renderer_->drawAlpha(body_, model, 0.42f);
+    // ホイールも薄く出す (ステア・回転は再現しない簡易版)。
+    const float wheelX = 0.82f;
+    const float wheelZ[2] = {1.42f, -1.38f};
+    for (int i = 0; i < 2; ++i) {
+        for (int side = -1; side <= 1; side += 2) {
+            Mat4 place = mul(translation(float(side) * wheelX, 0.34f, wheelZ[i]), Mat4());
+            renderer_->drawAlpha(wheel_, mul(model, place), 0.42f);
         }
     }
 }

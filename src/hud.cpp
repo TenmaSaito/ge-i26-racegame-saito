@@ -383,15 +383,15 @@ void Hud::drawTitle(Game& app, float t) {
 }
 
 // リザルト画面の文字。Race が保持する合計・ベスト・直近ラップを出す。
-void Hud::drawResult(Game& app, float t) {
+void Hud::drawResult(Game& app, float t, int rank) {
     IRenderer& hud = *app.renderer();
     hud.beginHud();
     const float W = float(hud.width());
     const float H = float(hud.height());
     const Race& race = app.race();
     // 中央パネル (タイム一覧の土台)。
-    const float pw = 580.0f;
-    const float ph = 340.0f;
+    const float pw = 620.0f;
+    const float ph = 470.0f;
     const float px = (W - pw) * 0.5f;
     const float py = (H - ph) * 0.5f;
     hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.88f);
@@ -411,9 +411,70 @@ void Hud::drawResult(Game& app, float t) {
     formatTime(time, sizeof(time), race.lastLap());
     std::snprintf(line, sizeof(line), "LAST LAP  %s", time);
     centerText(py + 208, 2.6f, line, 0.85f, 0.88f, 0.92f);
+    // 今回の順位 (ランキング圏内なら)。
+    if (rank == 0) {
+        centerText(py + 252, 2.4f, "NEW RECORD!  RANK #1", 1.0f, 0.6f, 0.3f);
+    } else if (rank > 0) {
+        std::snprintf(line, sizeof(line), "RANK #%d", rank + 1);
+        centerText(py + 252, 2.4f, line, 0.95f, 0.85f, 0.5f);
+    }
+    // コース別ランキング (上位 5 件)。今回のタイムと一致する行は目立たせる。
+    const std::vector<float>& board = app.ranking().entries(app.courseStem());
+    float rowY = py + 300;
+    for (size_t i = 0; i < board.size(); ++i) {
+        formatTime(time, sizeof(time), board[i]);
+        std::snprintf(line, sizeof(line), "#%d  %s", int(i) + 1, time);
+        bool mine = int(i) == rank;
+        centerText(rowY, 2.0f, line, mine ? 1.0f : 0.8f, mine ? 0.75f : 0.82f, mine ? 0.4f : 0.86f);
+        rowY += 30;
+    }
     // 行き先の案内は点滅させる。
     if (std::sin(t * 3.2f) > -0.3f) {
-        centerText(py + ph - 54, 2.0f, "ENTER: RACE AGAIN    T: TITLE", 1.0f, 1.0f, 1.0f);
+        centerText(py + ph - 44, 2.0f, "ENTER: RACE AGAIN    T: TITLE", 1.0f, 1.0f, 1.0f);
+    }
+    hud.flushHud();
+}
+
+// セレクト画面の文字。コース 3 件と車種 3 件を並べ、選択中を ▶ と色で示す。
+// 各コースにはベスト合計タイム (ランキング) も添える。
+void Hud::drawSelect(Game& app, int course, int spec, float t) {
+    IRenderer& hud = *app.renderer();
+    hud.beginHud();
+    const float W = float(hud.width());
+    const float H = float(hud.height());
+    hud.addQuad(0, 0, W, H, 0.02f, 0.04f, 0.08f, 0.35f);
+    auto centerText = [&](float y, float scale, const char* text, float r, float g, float b) {
+        float w = float(std::strlen(text)) * 6.0f * scale;
+        hud.drawText((W - w) * 0.5f, y, scale, text, r, g, b, 1);
+    };
+    char line[128];
+    char time[32];
+    centerText(H * 0.12f, 3.4f, "SELECT STAGE", 1.0f, 0.95f, 0.9f);
+    float y = H * 0.24f;
+    for (int i = 0; i < kCourseCount; ++i) {
+        float best = app.ranking().best(kCourses[i].stem);
+        if (best > 0) {
+            formatTime(time, sizeof(time), best);
+            std::snprintf(line, sizeof(line), "%s %s   BEST %s", i == course ? ">" : " ",
+                          kCourses[i].name, time);
+        } else {
+            std::snprintf(line, sizeof(line), "%s %s", i == course ? ">" : " ", kCourses[i].name);
+        }
+        bool sel = i == course;
+        centerText(y, 2.6f, line, sel ? 1.0f : 0.75f, sel ? 0.85f : 0.78f, sel ? 0.45f : 0.82f);
+        y += 44;
+    }
+    centerText(y + 18, 3.4f, "SELECT CAR", 1.0f, 0.95f, 0.9f);
+    y += 78;
+    for (int i = 0; i < 3; ++i) {
+        std::snprintf(line, sizeof(line), "%s %s", i == spec ? ">" : " ", kCarSpecs[i].name);
+        bool sel = i == spec;
+        centerText(y, 2.6f, line, sel ? 1.0f : 0.75f, sel ? 0.85f : 0.78f, sel ? 0.45f : 0.82f);
+        y += 44;
+    }
+    centerText(y + 16, 1.8f, "LEFT/RIGHT: STAGE   UP/DOWN: CAR", 0.8f, 0.84f, 0.88f);
+    if (std::sin(t * 3.2f) > -0.3f) {
+        centerText(y + 50, 2.4f, "ENTER: START RACE", 1.0f, 1.0f, 1.0f);
     }
     hud.flushHud();
 }

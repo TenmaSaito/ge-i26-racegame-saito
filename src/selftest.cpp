@@ -8,6 +8,7 @@
 
 #include "car.hpp"
 #include "effects.hpp"  // タイヤ痕の生成テスト用
+#include "ghost.hpp"    // Ghost の検証用
 #include "object.hpp"   // ObjectManager の検証用
 #include "track.hpp"
 
@@ -261,6 +262,25 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         std::printf("self-test objects find %d type %d update %d destroy %d\n",
                     okFind ? 1 : 0, okType ? 1 : 0, okUpdate ? 1 : 0, okDestroy ? 1 : 0);
         if (!okFind || !okType || !okUpdate || !okDestroy) return 11;
+    }
+    // ゴースト: 記録→最速保存→時刻指定でポーズが返ること。
+    {
+        Ghost ghost;
+        Car gc;
+        ghost.beginLap();
+        for (int i = 0; i < 120; ++i) {
+            gc.x = float(i) * 0.5f;
+            ghost.recordPose(gc);
+        }
+        ghost.finishLap(2.0f);
+        Vec3 pos;
+        float yaw = 0;
+        bool okHas = ghost.hasGhost() && ghost.bestTime() == 2.0f;
+        bool okPose = ghost.poseAt(1.0f, pos, yaw) && pos.x > 29.0f && pos.x < 31.0f;
+        bool okEnd = !ghost.poseAt(3.0f, pos, yaw);  // ゴースト終了後は出ない
+        std::printf("self-test ghost has %d pose %d end %d\n",
+                    okHas ? 1 : 0, okPose ? 1 : 0, okEnd ? 1 : 0);
+        if (!okHas || !okPose || !okEnd) return 12;
     }
     // タイヤ痕: ドリフト状態の車を直進させると、痕の区間が刻まれること。
     {

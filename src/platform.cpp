@@ -18,6 +18,7 @@
 #include "input.hpp"   // input::attachWindow / detach
 #include "render.hpp"  // createRenderer / destroyRenderer
 #include "tuning.hpp"  // parseTuning / kTuningStorageKey (外部変更の反映用)
+#include "ranking.hpp"  // kRankingStorageKey
 
 #include <SDL.h>
 #include <SDL_image.h>
@@ -173,6 +174,23 @@ void sendDebugText(const char* text) {
 // フルスクリーン切替 (F キー)。入力アダプタから呼ばれる表示系の操作。
 // ページ側から強制するとキャンバスと描画バッファがずれて暗転するため、
 // 必ず SDL 経由で切り替える。
+// コースファイルを探して読み込む（実行場所によって基点が違うため候補を順に試す）。
+bool loadTrack(const std::string& stem, Track& track) {
+    const std::string file = stem + ".txt";
+    const std::string paths[] = {
+        "assets/track/" + file,
+        "../assets/track/" + file,
+        "/assets/track/" + file,
+    };
+    for (const std::string& path : paths) {
+        std::string text;
+        if (readTextFile(path, text)) {
+            return track.loadFromText(text);
+        }
+    }
+    return false;
+}
+
 void toggleFullscreen() {
     if (!gWindow) {
         return;
@@ -233,6 +251,15 @@ bool createWindow(Game& app) {
     input::attachWindow(gWindow);
     // Game の差し込み口に、この層の実装を登録する。
     app.setDebugSink([](const char* text) { sendDebugText(text); });
+    // コース読み込みとランキング保存の差し込み口もここで配線する。
+    app.setTrackLoader([](const std::string& stem, Track& track) { return loadTrack(stem, track); });
+    app.setRankingSink([](const std::string& text) { saveSetting(kRankingStorageKey, text); });
+    {
+        std::string savedRanking;
+        if (loadSetting(kRankingStorageKey, savedRanking)) {
+            app.setRankingText(savedRanking);
+        }
+    }
     app.setSaveTuningSink([](const std::string& text) {
         saveSetting(kTuningStorageKey, text);
     });

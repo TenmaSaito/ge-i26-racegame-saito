@@ -30,4 +30,8 @@ private:
     float prevX_ = 0, prevY_ = 0, prevZ_ = 0, prevYaw_ = 0, prevSlip_ = 0;  // 1 ステップ前
     float viewX_ = 0, viewY_ = 0, viewZ_ = 0, viewYaw_ = 0, viewSlip_ = 0;  // 補間結果
     bool viewReady_ = false;  // 補間ポーズが有効か
+
+    // ゴースト記録の状態管理用 (ラップ開始と完了の検出)。
+    bool wasTiming_ = false;   // 前ステップで計測中だったか
+    int prevCompleted_ = 0;    // 前ステップの完了周回数
 };

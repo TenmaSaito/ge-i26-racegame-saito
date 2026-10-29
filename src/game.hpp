@@ -16,6 +16,10 @@
 #include "race.hpp"     // Race (周回・計時)
 #include "render.hpp"   // IRenderer (ポート), GpuMesh
 #include "object.hpp"   // ObjectManager (オブジェクト一括管理)
+#include "ghost.hpp"    // Ghost (前回の自分のゴースト)
+#include "ranking.hpp"  // Ranking (ローカルランキング)
+
+#include <functional>
 #include "scene.hpp"    // IScene / SceneId
 #include "track.hpp"    // Track
 
@@ -30,7 +34,9 @@ class IScene;  // 現在のシーン (scene.hpp の基底)
 class Game {
 public:
     // title はウィンドウタイトル (コース名)、track は読み込み済みコース。
-    Game(std::string title, Track track);
+    // initialStem は最初に読み込むコース (例: "suzuka")。
+    // コース実体の読み込みは setTrackLoader で差し込まれた外側の仕事。
+    explicit Game(std::string initialStem);
     ~Game();
 
     // --- 外側からの差し込み口 (platform が起動時に登録する) ----------------
@@ -64,9 +70,28 @@ public:
         hasPendingScene_ = true;
     }
 
+    // コース読み込みの差し込み口 (platform が実装を渡す)。
+    using TrackLoader = std::function<bool(const std::string& stem, Track& out)>;
+    void setTrackLoader(TrackLoader loader) { trackLoader_ = std::move(loader); }
+    // コースを読み直す (路面・景観・オブジェクトを作り直し、車を置き直す)。
+    // セレクト画面からの切り替えと、起動時の初期読み込みの両方で使う。
+    bool loadCourse(const std::string& stem);
+    const std::string& courseStem() const { return courseStem_; }
+    // ランキング保存の差し込み口と、起動時の復元。
+    void setRankingSink(std::function<void(const std::string&)> sink) { rankingSink_ = std::move(sink); }
+    void setRankingText(const std::string& text) { ranking_.deserialize(text); }
+    Ranking& ranking() { return ranking_; }
+    const Ranking& ranking() const { return ranking_; }
+    // ゴール結果をランキングへ登録して保存する。順位 (0 始まり) か圏外 -1。
+    int recordResult();
+
     // --- シーンから使う共通サービス -----------------------------------------
     Hud& hud() { return *hud_; }              // HUD 描画器
     Effects& effects() { return effects_; }   // 演出 (煙・光跡・タイヤ痕)
+    Ghost& ghost() { return ghost_; }         // ゴースト (記録と再生)
+    const Ghost& ghost() const { return ghost_; }
+    // ゴーストを半透明で描く (計測中で保存済みがあるときだけ実働)。
+    void drawGhost();
     // オブジェクトの一括管理 (景観インスタンスと Player が登録される)。
     ObjectManager& objects() { return objects_; }
     const ObjectManager& objects() const { return objects_; }
@@ -117,7 +142,13 @@ private:
     void switchScene(SceneId id);
 
     // --- 基本情報 ---
-    std::string title_;  // ウィンドウタイトル (コース名)
+    std::string title_;        // コース表示名 (loadCourse で更新される)
+    std::string courseStem_;   // 現在のコース stem
+    std::string initialStem_;  // 起動時に読み込むコース stem
+    TrackLoader trackLoader_;  // コース読み込みの差し込み口
+    Ranking ranking_;          // ローカルランキング
+    Ghost ghost_;              // ゴースト (最速ラップの記録と再生)
+    std::function<void(const std::string&)> rankingSink_;  // ランキング保存口
     Track track_;        // コースデータ
     Car car_;            // 自車
     Race race_;          // 周回・計時

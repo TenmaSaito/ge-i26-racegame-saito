@@ -13,6 +13,7 @@
 
 void ResultScene::enter() {
     t_ = 0;
+    rank_ = game_.recordResult();  // ゴール結果をランキングへ登録 (保存まで)
     // 車はゴール地点で止まったまま。カメラは次のフレームから周回させる。
     game_.camera().ready = true;
 }
@@ -45,5 +46,5 @@ void ResultScene::frame(double dt) {
 
     game_.beginWorldDraw();
     game_.drawWorld({car.x, car.y, car.z}, car.yaw);
-    game_.hud().drawResult(game_, float(t_));
+    game_.hud().drawResult(game_, float(t_), rank_);
 }

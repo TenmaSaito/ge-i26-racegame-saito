@@ -35,6 +35,8 @@ struct IRenderer {
     virtual void drawSky() = 0;
     virtual void beginWorld(const Mat4& viewProj, Vec3 cameraPos) = 0;
     virtual void draw(const GpuMesh& mesh, const Mat4& model) = 0;
+    // 半透明で描く (ゴースト用)。alpha は 0..1、奥の物が透けて見える。
+    virtual void drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) = 0;
     // 毎フレーム作り直す小さなメッシュ（タイヤ煙・光跡）用。バッファを使い回す。
     virtual void drawDynamic(const CpuMesh& mesh) = 0;
 

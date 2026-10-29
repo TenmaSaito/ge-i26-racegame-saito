@@ -92,6 +92,19 @@ void RaceScene::frame(double dtSeconds) {
         while (accumulator_ >= kFixedStepSec && guard < 8) {
             car.update(float(kFixedStepSec), input, app.track());
             app.race().tick(car.ground.s, app.track().length, float(kFixedStepSec));
+            // ゴースト: 計測が始まったら記録開始、計測中は毎ステップ記録、
+            // 周回が完了したら最速判定つきで締める。
+            if (app.race().timing() && !wasTiming_) {
+                app.ghost().beginLap();
+            }
+            if (app.race().timing()) {
+                app.ghost().recordPose(car);
+            }
+            wasTiming_ = app.race().timing();
+            if (app.race().completed() != prevCompleted_) {
+                app.ghost().finishLap(app.race().lastLap());
+                prevCompleted_ = app.race().completed();
+            }
             accumulator_ -= kFixedStepSec;
             ++guard;
         }
@@ -125,6 +138,7 @@ void RaceScene::frame(double dtSeconds) {
     // --- 描画 ---------------------------------------------------------------
     app.beginWorldDraw();
     app.drawWorld({viewX_, viewY_, viewZ_}, viewYaw_);
+    app.drawGhost();
     app.drawEffects();
     app.hud().draw(app);
 }

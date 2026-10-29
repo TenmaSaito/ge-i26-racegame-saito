@@ -47,6 +47,7 @@ in vec3 vNormal;
 in vec3 vColor;
 in vec3 vWorld;
 uniform vec3 uCamPos;
+uniform float uAlpha;
 out vec4 fragColor;
 void main() {
     vec3 n = normalize(vNormal);
@@ -57,7 +58,7 @@ void main() {
     float dist = distance(vWorld, uCamPos);
     float fog = clamp((dist - 90.0) / 1500.0, 0.0, 1.0);
     vec3 haze = vec3(0.62, 0.74, 0.84);
-    fragColor = vec4(mix(color, haze, fog), 1.0);
+    fragColor = vec4(mix(color, haze, fog), uAlpha);
 }
 )GLSL";
 
@@ -196,6 +197,7 @@ struct GlRenderer final : IRenderer {
     void drawSky() override;
     void beginWorld(const Mat4& viewProj, Vec3 cameraPos) override;
     void draw(const GpuMesh& mesh, const Mat4& model) override;
+    void drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) override;
     void drawDynamic(const CpuMesh& mesh) override;
     void beginHud() override;
     void addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) override;
@@ -215,6 +217,7 @@ struct GlRenderer final : IRenderer {
     unsigned dynVbo = 0;
     unsigned dynIbo = 0;
     int uViewProj = -1;
+    int uAlphaLoc = -1;  // 半透明描画用の不透明度 uniform
     int uModel = -1;
     int uCamPos = -1;
     int uOrtho = -1;
@@ -231,6 +234,7 @@ bool GlRenderer::init() {
         return false;
     }
     uViewProj = glGetUniformLocation(worldProgram, "uViewProj");
+    uAlphaLoc = glGetUniformLocation(worldProgram, "uAlpha");
     uModel = glGetUniformLocation(worldProgram, "uModel");
     uCamPos = glGetUniformLocation(worldProgram, "uCamPos");
     uOrtho = glGetUniformLocation(hudProgram, "uOrtho");
@@ -282,6 +286,20 @@ void GlRenderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
     glUseProgram(worldProgram);
     glUniformMatrix4fv(uViewProj, 1, GL_FALSE, viewProj.m);
     glUniform3f(uCamPos, cameraPos.x, cameraPos.y, cameraPos.z);
+    glUniform1f(uAlphaLoc, 1.0f);  // 通常描画は不透明 (ゴースト描画が戻し忘れても安全なよう毎回)
+}
+
+// 半透明描画 (ゴースト用)。ブレンドを有効化し、深度書き込みを止めて
+// 描くことで、重なった部分も自然に透ける。終わったら状態を戻す。
+void GlRenderer::drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glUniform1f(uAlphaLoc, alpha);
+    draw(mesh, model);
+    glUniform1f(uAlphaLoc, 1.0f);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
 }
 
 void GlRenderer::draw(const GpuMesh& mesh, const Mat4& model) {

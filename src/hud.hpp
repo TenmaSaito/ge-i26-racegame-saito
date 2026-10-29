@@ -17,8 +17,10 @@ public:
     void draw(Game& app);
     // タイトル画面の文字 (t は点滅用の経過秒)。
     void drawTitle(Game& app, float t);
-    // リザルト画面の文字 (タイムと行き先の案内)。
-    void drawResult(Game& app, float t);
+    // セレクト画面の文字 (コースと車種の選択肢)。
+    void drawSelect(Game& app, int course, int spec, float t);
+    // リザルト画面の文字 (タイム・順位・ランキングと行き先の案内)。
+    void drawResult(Game& app, float t, int rank);
 
 private:
     void drawMinimap(Game& app);       // コース全体図と自車マーカー

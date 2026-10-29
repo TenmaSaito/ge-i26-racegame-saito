@@ -11,8 +11,13 @@
 #include <string>
 
 struct Game;
+struct Track;  // コース実体 (track.hpp)。loadTrack の引数用
 
 namespace platform {
+
+// コースファイルを探して読み込む (候補パスを順に試す)。
+// Game の TrackLoader 差し込み口の実装で、セレクト画面での切替にも使う。
+bool loadTrack(const std::string& stem, Track& track);
 
 // テキストファイルを丸ごと読む。Android では APK 内アセットもこれで読める
 // （裏側が SDL_RWops のため）。失敗したら false。

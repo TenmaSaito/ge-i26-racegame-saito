@@ -51,23 +51,7 @@ std::string pickTrackStem(int argc, char** argv) {
     return "suzuka";
 }
 
-// コースファイルを探して読み込む（実行場所によって基点が違うため候補を順に試す）。
-bool loadTrack(const std::string& stem, Track& track) {
-    const std::string file = stem + ".txt";
-    const std::string paths[] = {
-        "assets/track/" + file,
-        "../assets/track/" + file,
-        "/assets/track/" + file,
-    };
-    for (const std::string& path : paths) {
-        std::string text;
-        if (platform::readTextFile(path, text)) {
-            return track.loadFromText(text);
-        }
-    }
-    return false;
-}
-
+// コース読み込みは platform::loadTrack に集約した (ゲーム中の切替と共用)。
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -79,14 +63,14 @@ int main(int argc, char** argv) {
     }
     std::string stem = pickTrackStem(argc, argv);
     Track track;
-    if (!loadTrack(stem, track)) {
+    if (!platform::loadTrack(stem, track)) {
         if (stem == "suzuka") {
             std::fprintf(stderr, "コースを読めません: %s\n", stem.c_str());
             return 1;
         }
         // 指定コースが無ければ既定コースに落とす（ブラウザのタイプミス対策）。
         stem = "suzuka";
-        if (!loadTrack(stem, track)) {
+        if (!platform::loadTrack(stem, track)) {
             std::fprintf(stderr, "コースを読めません: %s\n", stem.c_str());
             return 1;
         }
@@ -104,15 +88,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ゲーム本体を組み立てる (タイトルはコース名、コースは読み込み済み)。
-    std::string title = "Suzuka Circuit";
-    if (stem == "flow") {
-        title = "Flow Circuit";
-    }
-    if (stem == "coast") {
-        title = "Coast Circuit";
-    }
-    Game app{title, std::move(track)};
+    // ゲーム本体を組み立てる。初期コースだけ渡し、実体の読み込みは
+    // createWindow で差し込まれるローダ経由で init が行う。
+    Game app{stem};
     if (!platform::createWindow(app)) {
         return 1;
     }

@@ -23,7 +23,7 @@ void TitleScene::frame(double dt) {
         game_.requestQuit();
     }
     if (ui.confirm) {
-        game_.requestScene(SceneId::Race);
+        game_.requestScene(SceneId::Select);  // まずステージ/車種選択へ
         return;
     }
     t_ += dt;
