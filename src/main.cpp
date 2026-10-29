@@ -96,7 +96,13 @@ int main(int argc, char** argv) {
         return stem == "suzuka" ? runSelfTest(track, 5200.0f, 6500.0f)
                                 : runSelfTest(track, 1500.0f, 15000.0f);
     }
-    loadTuning();
+    // 保存済みの調整値を読む (読み取りは platform、解釈は tuning の担当)。
+    {
+        std::string saved;
+        if (platform::loadSetting(kTuningStorageKey, saved)) {
+            parseTuning(saved.c_str());
+        }
+    }
 
     Game app;
     if (stem == "flow") {
@@ -111,6 +117,6 @@ int main(int argc, char** argv) {
     }
     gameInit(app);
     platform::runMainLoop(app);
-    gameShutdown(app);
+    platform::destroyWindow(app);  // 終了処理はすべて外側 (platform) の担当
     return 0;
 }

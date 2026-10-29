@@ -1,16 +1,23 @@
 // ============================================================================
-// platform.cpp ― プラットフォーム層の実装（SDL2 が唯一の依存）
-// 役割: ウィンドウ/GL の生成、ファイル読み込み、設定の保存、
-//       メインループの駆動。OS や実行環境の違いはここで吸収する。
-// Android への移植: SDL2 が Android でも同じ API を提供するため、
+// platform.cpp ― プラットフォーム層の実装 (最も外側の層)
+// 役割: ウィンドウ/GL の生成と所有、描画実装の生成と Game への差し込み、
+//       入力アダプタへのウィンドウ引き渡し、ファイル読み込み、設定の保存、
+//       メインループの駆動 (時間計測・画面サイズ反映・画面表示まで)。
+//       OS や実行環境の違いはすべてここで吸収する。
+// レイヤー方針: 依存は「外側 → 内側」のみ。この層は内側 (game / tuning 等)
+//       を知ってよいが、内側はこの層を直接知らない (ポート経由)。
+// Android への移植: SDL が Android でも同じ API を提供するため、
 //       このファイルは原則そのまま使える（アセット読み込みは SDL_RWops）。
-// 依存: SDL2 本体に加え、テクスチャ読み込み用 SDL_image と
-//       音声用 SDL_mixer（どちらも SDL 公式の姉妹ライブラリで Android 対応）。
+// 依存: SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer
+//       (いずれも SDL 公式の姉妹ライブラリで Android 対応)。
 // ============================================================================
 
 #include "platform.hpp"
 
-#include "game.hpp"
+#include "game.hpp"    // Game (状態の置き場)
+#include "input.hpp"   // input::attachWindow / detach
+#include "render.hpp"  // createRenderer / destroyRenderer
+#include "tuning.hpp"  // parseTuning / kTuningStorageKey (外部変更の反映用)
 
 #include <SDL.h>
 #include <SDL_image.h>
@@ -51,7 +58,19 @@ EM_JS(char*, queryParamJs, (const char* key), {
         return p;
     } catch (e) { return 0; }
 });
+// ページ側のデバッグ欄 (window.raceSetDebug) へ文字列を渡す。
+EM_JS(void, debugToPageJs, (const char* text), {
+    if (window.raceSetDebug) window.raceSetDebug(UTF8ToString(text));
+});
 #endif
+
+namespace {
+
+// この層が所有する実物。Game はウィンドウや GL を知らない。
+SDL_Window* gWindow = nullptr;
+SDL_GLContext gGl = nullptr;
+
+}  // namespace
 
 namespace platform {
 
@@ -140,37 +159,30 @@ std::string urlQueryParam(const char* key) {
 #endif
 }
 
-bool createWindowImpl(Game& app) {
+// ページ側デバッグ欄への送信 (ブラウザのみ実働、他では何もしない)。
+// Game の debugSink にはこの関数が差し込まれる。
+void sendDebugText(const char* text) {
 #ifdef __EMSCRIPTEN__
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    debugToPageJs(text);
 #else
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    (void)text;
 #endif
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    app.window = SDL_CreateWindow(app.title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
-                                  SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
-    if (!app.window) {
-        SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
-        return false;
-    }
-    app.gl = SDL_GL_CreateContext(app.window);
-    if (!app.gl) {
-        SDL_Log("SDL_GL_CreateContext failed: %s", SDL_GetError());
-        return false;
-    }
-    SDL_GL_SetSwapInterval(1);
-    if (!app.renderer.init()) {
-        SDL_Log("GL init failed");
-        return false;
-    }
-    return true;
 }
 
+// フルスクリーン切替 (F キー)。入力アダプタから呼ばれる表示系の操作。
+// ページ側から強制するとキャンバスと描画バッファがずれて暗転するため、
+// 必ず SDL 経由で切り替える。
+void toggleFullscreen() {
+    if (!gWindow) {
+        return;
+    }
+    Uint32 flags = SDL_GetWindowFlags(gWindow);
+    SDL_SetWindowFullscreen(gWindow, (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+}
+
+}  // namespace platform
+
+namespace platform {
 
 bool createWindow(Game& app) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
@@ -185,28 +197,120 @@ bool createWindow(Game& app) {
     if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) != 0) {
         SDL_Log("Mix_OpenAudio failed: %s", Mix_GetError());
     }
-    return createWindowImpl(app);
+#ifdef __EMSCRIPTEN__
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#else
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+#endif
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    gWindow = SDL_CreateWindow(app.title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+                               SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
+    if (!gWindow) {
+        SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
+        return false;
+    }
+    gGl = SDL_GL_CreateContext(gWindow);
+    if (!gGl) {
+        SDL_Log("SDL_GL_CreateContext failed: %s", SDL_GetError());
+        return false;
+    }
+    SDL_GL_SetSwapInterval(1);
+    // 描画実装を生成して Game へ差し込む (内側は IRenderer だけを見る)。
+    app.renderer = createRenderer();
+    if (!app.renderer || !app.renderer->init()) {
+        SDL_Log("GL init failed");
+        return false;
+    }
+    // 入力アダプタへウィンドウを引き渡す (パッドの所有も入力側)。
+    input::attachWindow(gWindow);
+    // Game の差し込み口に、この層の実装を登録する。
+    app.debugSink = [](const char* text) { sendDebugText(text); };
+    app.saveTuningText = [](const std::string& text) {
+        saveSetting(kTuningStorageKey, text);
+    };
+    return true;
 }
 
 void destroyWindow(Game& app) {
+    input::detach();
+    if (app.renderer) {
+        destroyRenderer(app.renderer);
+        app.renderer = nullptr;
+    }
     Mix_CloseAudio();
     Mix_Quit();
     IMG_Quit();
-    if (app.gl) {
-        SDL_GL_DeleteContext(app.gl);
-        app.gl = nullptr;
+    if (gGl) {
+        SDL_GL_DeleteContext(gGl);
+        gGl = nullptr;
     }
-    if (app.window) {
-        SDL_DestroyWindow(app.window);
-        app.window = nullptr;
+    if (gWindow) {
+        SDL_DestroyWindow(gWindow);
+        gWindow = nullptr;
     }
     SDL_Quit();
 }
 
 namespace {
-void loopCallback(void* userdata) {
-    gameFrame(*static_cast<Game*>(userdata));
+
+// ブラウザ版のみ: 外部ツール (Chrome 拡張など) が保存値を書き換えたら
+// 走行へライブ反映する。監視と読み取りは外側の仕事なのでこの層で行い、
+// 内側 (tuning) には parse だけをさせる。約 0.5 秒に 1 回見る。
+void pollExternalTuningChange() {
+#ifdef __EMSCRIPTEN__
+    static int tick = 0;
+    static std::string lastSeen;
+    static bool first = true;
+    if (++tick < 30) {
+        return;
+    }
+    tick = 0;
+    std::string current;
+    if (!loadSetting(kTuningStorageKey, current)) {
+        return;
+    }
+    if (first) {
+        first = false;
+        lastSeen = current;
+        return;
+    }
+    if (current != lastSeen) {
+        lastSeen = current;
+        parseTuning(current.c_str());
+    }
+#endif
 }
+
+// 1 フレーム分の外側の仕事: 時間を測る → サイズを反映 → 内側を進める → 表示。
+void frameOnce(Game& app) {
+    static Uint64 lastCounter = 0;
+    Uint64 now = SDL_GetPerformanceCounter();
+    double dt = lastCounter == 0
+                    ? 0.0
+                    : double(now - lastCounter) / double(SDL_GetPerformanceFrequency());
+    lastCounter = now;
+
+    pollExternalTuningChange();
+
+    int drawableW = 0;
+    int drawableH = 0;
+    SDL_GL_GetDrawableSize(gWindow, &drawableW, &drawableH);
+    if (app.renderer) {
+        app.renderer->resize(drawableW, drawableH);
+    }
+    gameFrame(app, dt);
+    SDL_GL_SwapWindow(gWindow);
+}
+
+void loopCallback(void* userdata) {
+    frameOnce(*static_cast<Game*>(userdata));
+}
+
 }  // namespace
 
 void runMainLoop(Game& app) {
@@ -215,7 +319,7 @@ void runMainLoop(Game& app) {
 #else
     while (app.running) {
         Uint64 frameStart = SDL_GetPerformanceCounter();
-        gameFrame(app);
+        frameOnce(app);
         double frameMs = double(SDL_GetPerformanceCounter() - frameStart) /
                          double(SDL_GetPerformanceFrequency()) * 1000.0;
         if (frameMs < 14.0) {

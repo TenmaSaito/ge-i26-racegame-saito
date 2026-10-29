@@ -1,20 +1,22 @@
 #pragma once
 // ============================================================================
-// game.hpp ― ゲーム全体の状態 (Game) と進行の入口
+// game.hpp ― ゲーム全体の状態 (Game) と進行の入口 (アプリケーション層)
 // 役割: アプリの状態を 1 か所に集約し、1 フレームの進行 (gameFrame) と
-//       初期化・終了の宣言を持つ。旧 App 構造体の後継。
-// 依存: 描画 (render.hpp)、車両・コース等のロジック層。SDL の型は
-//       ウィンドウ等のポインタ保持のためだけに使う。
+//       初期化の宣言を持つ。
+// レイヤー方針: この層は SDL / OpenGL を直接知らない。描画は render.hpp の
+//       ポート (IRenderer) 経由、入力は input.hpp のポート経由。
+//       ウィンドウや GL の実物は外側 (platform) が所有する。
+//       外側の能力が要るときは、下の「ポート (差し込み口)」に外側が
+//       実装を差し込む (依存性逆転)。内側から外側への直接依存は作らない。
 // ============================================================================
 
 #include "camera.hpp"   // Orbit（カメラ状態）
 #include "car.hpp"      // Car, DriveInput
 #include "effects.hpp"  // SmokePuff, TrailPoint
-#include "render.hpp"   // Renderer, GpuMesh
+#include "render.hpp"   // IRenderer (ポート), GpuMesh
 #include "track.hpp"    // Track
 
-#include <SDL.h>
-
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -30,10 +32,13 @@ struct Race {
 // ゲーム全体の状態。所有は main が持ち、各モジュールは Game& を受け取って働く。
 struct Game {
     std::string title = "Suzuka Circuit";  // ウィンドウタイトル（コース名）
-    SDL_Window* window = nullptr;
-    SDL_GLContext gl = nullptr;
-    SDL_GameController* pad = nullptr;
-    Renderer renderer;
+
+    // --- ポート (外側が実装を差し込む口) ---
+    IRenderer* renderer = nullptr;  // 描画実装 (platform::createWindow が生成)
+    // ブラウザのページ側デバッグ欄へ文字列を渡す口 (ネイティブでは未設定)。
+    std::function<void(const char*)> debugSink;
+    // チューニング値の保存口 (引数は serializeTuning() の文字列)。
+    std::function<void(const std::string&)> saveTuningText;
     Track track;
     Car car;
     GpuMesh body;
@@ -72,16 +77,16 @@ struct Game {
     bool showTuning = false;     // ドリフトのチューニングパネル（T キーで開閉）
     int tuneIndex = 0;           // パネルで選択中の項目
     double accumulator = 0;
-    Uint64 prevCounter = 0;
 };
 
 // 初期化（メッシュ構築と GPU へのアップロード、車両リセット）。
-// ウィンドウ生成は platform::createWindow が先に済ませている前提。
+// ウィンドウ生成と renderer の差し込みは platform::createWindow が先に済ませる。
 void gameInit(Game& app);
-// 1 フレームの進行（イベント処理→物理→描画）。platform のループから呼ばれる。
-void gameFrame(Game& app);
-// 終了処理（パッド・GL・ウィンドウの破棄は platform 側と分担）。
-void gameShutdown(Game& app);
+// 1 フレームの進行（入力取得→物理→描画）。platform のループから呼ばれ、
+// 経過時間 dtSeconds は外側が測って渡す（この層は時計を持たない）。
+void gameFrame(Game& app, double dtSeconds);
+// 終了処理は持たない: ウィンドウ・GL・入力の破棄はすべて外側
+// (platform::destroyWindow) の担当。
 
 // レース状態のリセットと周回判定。game.cpp 内の小物。
 void resetRace(Game& app);

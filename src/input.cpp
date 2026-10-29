@@ -1,14 +1,15 @@
 // ============================================================================
-// input.cpp ― 入力層
+// input.cpp ― 入力アダプタ (外側の層)
 // 役割: キーボード / ゲームパッド / マウス / ブラウザの Gamepad API を読み、
-//       1 フレーム分の運転入力 (DriveInput) に変換する。
-// 依存: SDL2 のみ。ゲームの状態は書き換えず、DriveInput を返すだけ。
+//       input.hpp のポート (DriveInput / UiActions) に翻訳する。
+// 依存: SDL2 と platform (フルスクリーン切替)。どちらも外側の層同士。
+//       ゲームの状態は直接書き換えず、値で返すだけにする。
 // ============================================================================
 
 #include "input.hpp"
 
-#include "car.hpp"   // DriveInput
-#include "game.hpp"  // Game（パッドの所有者）
+#include "car.hpp"       // DriveInput
+#include "platform.hpp"  // platform::toggleFullscreen
 
 #include <SDL.h>
 #ifdef __EMSCRIPTEN__
@@ -17,21 +18,27 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
-void openPad(Game& app) {
+namespace {
+
+// このアダプタが所有する入力デバイス。Game はパッドやウィンドウを知らない。
+SDL_Window* gWindow = nullptr;
+SDL_GameController* gPad = nullptr;
+
+void openPad() {
 #ifdef __EMSCRIPTEN__
     // ブラウザのパッドは Gamepad API 側で読む。SDL で開くと入力が二重になる。
-    (void)app;
     return;
 #else
-    if (app.pad) {
+    if (gPad) {
         return;
     }
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
         if (SDL_IsGameController(i)) {
-            app.pad = SDL_GameControllerOpen(i);
-            if (app.pad) {
-                SDL_Log("controller: %s", SDL_GameControllerName(app.pad));
+            gPad = SDL_GameControllerOpen(i);
+            if (gPad) {
+                SDL_Log("controller: %s", SDL_GameControllerName(gPad));
                 break;
             }
         }
@@ -39,14 +46,12 @@ void openPad(Game& app) {
 #endif
 }
 
-void closePad(Game& app) {
-    if (app.pad) {
-        SDL_GameControllerClose(app.pad);
-        app.pad = nullptr;
+void closePad() {
+    if (gPad) {
+        SDL_GameControllerClose(gPad);
+        gPad = nullptr;
     }
 }
-
-
 
 float stickDead(float value) {
     const float dead = 0.14f;
@@ -63,7 +68,78 @@ float stickAxis(SDL_GameController* pad, SDL_GameControllerAxis axis) {
 }
 #endif
 
+}  // namespace
+
+namespace input {
+
+void attachWindow(SDL_Window* window) {
+    gWindow = window;
+    openPad();
+}
+
+void detach() {
+    closePad();
+    gWindow = nullptr;
+}
+
+}  // namespace input
+
+namespace input {
+
+// SDL イベントをすべて消化し、UI の意図 (UiActions) に翻訳する。
+// 割り当ての解釈はこの層の責任。F キーのフルスクリーンだけは表示系の
+// 操作なので、その場で platform に実行させる (意図として内側へ上げない)。
+UiActions pollUi(bool tuningOpen) {
+    UiActions ui;
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            ui.quit = true;
+        } else if (event.type == SDL_KEYDOWN) {
+            SDL_Scancode code = event.key.keysym.scancode;
+            if (code == SDL_SCANCODE_T && !event.key.repeat) {
+                ui.tuningToggle = true;
+            } else if (tuningOpen) {
+                // チューニング中は矢印キーを項目の選択と調整に使う（長押しリピート可）。
+                if (code == SDL_SCANCODE_UP) {
+                    ui.tuneSelect = -1;
+                } else if (code == SDL_SCANCODE_DOWN) {
+                    ui.tuneSelect = 1;
+                } else if (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_RIGHT) {
+                    float dir = code == SDL_SCANCODE_RIGHT ? 1.0f : -1.0f;
+                    float fast = (SDL_GetModState() & KMOD_SHIFT) ? 5.0f : 1.0f;
+                    ui.tuneAdjust = dir * fast;
+                }
+            } else if (!event.key.repeat) {
+                if (code == SDL_SCANCODE_ESCAPE) ui.quit = true;
+                else if (code == SDL_SCANCODE_R) ui.reset = true;
+                else if (code == SDL_SCANCODE_C) ui.cameraNext = true;
+                else if (code == SDL_SCANCODE_P) ui.pauseToggle = true;
+                else if (code == SDL_SCANCODE_H) ui.helpToggle = true;
+                else if (code == SDL_SCANCODE_B) ui.debugToggle = true;
+                else if (code == SDL_SCANCODE_F) platform::toggleFullscreen();
+                else if (code == SDL_SCANCODE_1) ui.carSpec = 0;
+                else if (code == SDL_SCANCODE_2) ui.carSpec = 1;
+                else if (code == SDL_SCANCODE_3) ui.carSpec = 2;
+            }
+        } else if (event.type == SDL_CONTROLLERDEVICEADDED) {
+            openPad();
+        } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && gPad &&
+                   event.cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gPad))) {
+            closePad();
+        } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+            if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) ui.reset = true;
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) ui.pauseToggle = true;
+            else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_Y) ui.cameraNext3 = true;
+        }
+    }
+    return ui;
+}
+
+}  // namespace input
+
 #ifdef __EMSCRIPTEN__
+namespace {
 // ブラウザの Gamepad API は 0 が離した状態、1 が押し込み。古いパッドは -1..1 で、離すと -1。
 float triggerLevel(float value) {
     if (value < 0) {
@@ -131,10 +207,14 @@ PadPulse readBrowserPad(DriveInput& input) {
     prevPause = pause;
     return pulse;
 }
+}  // namespace
 #endif
 
-DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& pulse,
-                     bool carDrifting) {
+namespace input {
+
+DriveInput sampleDrive(PadPulse& pulse, bool carDrifting) {
+    SDL_Window* window = gWindow;
+    SDL_GameController* pad = gPad;
     const Uint8* keys = SDL_GetKeyboardState(nullptr);
     DriveInput input;
     if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) input.throttle = 1;
@@ -240,3 +320,4 @@ DriveInput readDrive(SDL_Window* window, SDL_GameController* pad, PadPulse& puls
     return input;
 }
 
+}  // namespace input

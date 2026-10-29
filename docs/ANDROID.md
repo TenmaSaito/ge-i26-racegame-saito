@@ -4,25 +4,37 @@
 依存ライブラリは **SDL 系のみ**（SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer）。
 いずれも SDL 公式の姉妹ライブラリで、Android でも同じ手順で取り込める。
 
-## 構成の考え方
+## 構成の考え方 (レイヤードアーキテクチャ)
 
-| 層 | ファイル | Android での扱い |
+依存は **外側 → 内側の一方向のみ**。内側のコードは外側の実装を直接知らない。
+外側の能力が要る場所では、内側に「ポート (抽象)」を宣言し、外側が実装を
+差し込む (依存性逆転)。
+
+| 層 | ファイル | 知ってよいもの / Android での扱い |
 |---|---|---|
-| エントリ | `src/main.cpp` | 無変更（SDL が `main` を受け取る） |
-| プラットフォーム層 | `src/platform.cpp/.hpp` | SDL2 が窓口になるので原則無変更 |
-| ゲーム進行 | `src/game.cpp` ほか | 無変更 |
-| ロジック層 | `car / track / scenery` | SDL・GL 非依存。無変更 |
-| 描画 | `src/render.cpp` | `__ANDROID__` のとき自動で OpenGL ES 3 のヘッダとシェーダを使う |
+| ドメイン (最内) | car / track / scenery / tuning / geom / meshbuild | 標準ライブラリのみ。SDL・GL・OS を知らない。無変更 |
+| アプリケーション | game / hud / camera / effects / carmodel | ドメイン＋ポートだけを見る。無変更 |
+| ポート宣言 | render.hpp (IRenderer) / input.hpp (UiActions 等) | SDL を含まない宣言だけ |
+| アダプタ (外側) | render.cpp (OpenGL) / input.cpp (SDL・Gamepad API) / platform.cpp (SDL・窓・保存・ループ) | SDL / GL / Emscripten はここだけに現れる |
+| 合成ルート | main.cpp | 全部品の配線だけ (SDL すら直接触らない) |
 
-環境差は `platform.cpp` に閉じ込めてある:
-
-- ファイル読み込み: `platform::readTextFile` が Android では `SDL_RWops` 経由で
-  APK 内アセットを読む（通常の `ifstream` では読めないため）。ゲーム側は
-  「パスを渡して文字列を受け取る」だけなので、呼び出し側の変更は不要。
-- 設定の保存: `platform::saveSetting / loadSetting` が Android では
-  `SDL_GetPrefPath` の内部ストレージ領域に書く。
-- 描画 API: OpenGL ES 3.0（Android の標準）。デスクトップ GL との差は
-  `render.cpp` の `#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)` で吸収済み。
+具体的な差し込み:
+- 描画: platform が `createRenderer()` で GlRenderer を作り `Game.renderer` へ。
+  内側は `IRenderer*` しか見ない。Android では `__ANDROID__` のとき自動で
+  OpenGL ES 3 のヘッダとシェーダに切り替わる。
+- 入力: SDL イベントは input.cpp が「意図」(UiActions) に翻訳して渡す。
+  キー割り当ての解釈は外側の責任。F キーのフルスクリーンは表示系操作なので
+  入力アダプタがその場で platform に実行させる。パッドの所有も入力側。
+- 時間と表示: 経過時間の計測・画面サイズ反映・Swap は platform のループが
+  担当し、gameFrame には dt を渡すだけ。
+- 保存: tuning は文字列化と復元だけ (純粋)。読み書きは platform が行い、
+  ゲーム内からの保存は Game の差し込み口 `saveTuningText` 経由。
+  ファイル読み込みは `platform::readTextFile` が Android では `SDL_RWops`
+  経由で APK 内アセットを読む。設定の保存先は `SDL_GetPrefPath` の
+  内部ストレージ (ブラウザでは localStorage)。ブラウザの外部変更
+  (Chrome 拡張) の監視・反映も platform のループ側の仕事。
+- ページ側デバッグ表示: hud は文字列を作るだけ。送信は Game の
+  差し込み口 `debugSink` 経由で platform が行う。
 
 ## 手順（Android Studio）
 

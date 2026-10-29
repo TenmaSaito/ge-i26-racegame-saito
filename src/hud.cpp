@@ -14,7 +14,6 @@
 #include "tuning.hpp"
 
 #ifdef __EMSCRIPTEN__
-#include <emscripten.h>  // ページ側パネルへのデバッグ送信 (EM_ASM) 用
 #endif
 
 #include <cmath>
@@ -35,8 +34,8 @@ void formatTime(char* buf, int size, float seconds) {
 void drawMinimap(Game& app) {
     float size = 190.0f;
     float x0 = 24.0f;
-    float y0 = float(app.renderer.height) - size - 28.0f;
-    app.renderer.addQuad(x0, y0, x0 + size, y0 + size, 0.02f, 0.03f, 0.05f, 0.78f);
+    float y0 = float(app.renderer->height()) - size - 28.0f;
+    app.renderer->addQuad(x0, y0, x0 + size, y0 + size, 0.02f, 0.03f, 0.05f, 0.78f);
     // 範囲はコース固定なので初回だけ計算して使い回す（毎フレーム全数走査しない）。
     if (!app.mmReady) {
         app.mmMinX = app.mmMaxX = app.track.samples[0].x;
@@ -69,7 +68,7 @@ void drawMinimap(Game& app) {
             g = 0.72f;
             bl = 0.28f;
         }
-        app.renderer.drawLine(mapX(a.x), mapY(a.z), mapX(b.x), mapY(b.z), 2.0f, r, g, bl, 1);
+        app.renderer->drawLine(mapX(a.x), mapY(a.z), mapX(b.x), mapY(b.z), 2.0f, r, g, bl, 1);
     }
     float mx = mapX(app.car.x);
     float my = mapY(app.car.z);
@@ -81,17 +80,20 @@ void drawMinimap(Game& app) {
     float ly = my + nose.z * 5.0f - side.z * 5.0f;
     float rx = mx - nose.x * 5.0f - side.x * 5.0f;
     float ry = my + nose.z * 5.0f + side.z * 5.0f;
-    app.renderer.drawLine(lx, ly, nx, ny, 2.0f, 0.9f, 0.2f, 0.18f, 1);
-    app.renderer.drawLine(rx, ry, nx, ny, 2.0f, 0.9f, 0.2f, 0.18f, 1);
-    app.renderer.drawLine(lx, ly, rx, ry, 2.0f, 0.9f, 0.2f, 0.18f, 1);
+    app.renderer->drawLine(lx, ly, nx, ny, 2.0f, 0.9f, 0.2f, 0.18f, 1);
+    app.renderer->drawLine(rx, ry, nx, ny, 2.0f, 0.9f, 0.2f, 0.18f, 1);
+    app.renderer->drawLine(lx, ly, rx, ry, 2.0f, 0.9f, 0.2f, 0.18f, 1);
 }
 
 #ifdef __EMSCRIPTEN__
 // ブラウザ版のデバッグ表示はページ側のパネルに出す（画面をすっきりさせる）。
 // ページが window.raceSetDebug を定義していれば、約 12Hz で文字列を送る。
 void pushDebugToPage(Game& app) {
+    // ページへの送信実務は Game の差し込み口 (debugSink) の先 = 外側の担当。
+    // ここは表示文字列を組み立てるだけ。
     static int counter = 0;
     if ((counter++ % 5) != 0) return;
+    if (!app.debugSink) return;
     const Car& car = app.car;
     const DriveInput& in = app.lastInput;
     const char* why = "";
@@ -113,23 +115,21 @@ void pushDebugToPage(Game& app) {
                   static_cast<int>(std::lround(car.driftAmount * 100.0f)), car.driftCommand,
                   in.drift ? 1 : 0, in.steer, in.driftSteer, in.mouseDrift, in.throttle,
                   static_cast<int>(car.driftScore), static_cast<int>(car.driftChain), why);
-    EM_ASM({
-        if (window.raceSetDebug) window.raceSetDebug(UTF8ToString($0));
-    }, buf);
+    app.debugSink(buf);
 }
 #endif
 
 // ドリフトのデバッグ表示（B キーで切替）。状態・角度・横速度・入力と、
 // ドリフトに入らないときの理由を右上に常時出す。走らなくても切り分けられる。
 void drawDriftDebug(Game& app) {
-    Renderer& hud = app.renderer;
+    IRenderer& hud = *app.renderer;
     const Car& car = app.car;
     const DriveInput& in = app.lastInput;
     const float pw = 336.0f;
     const float lineH = 21.0f;
     const int lines = 11;
     const float ph = 14.0f + lineH * float(lines);
-    const float px = float(hud.width) - pw - 16.0f;
+    const float px = float(hud.width()) - pw - 16.0f;
     const float py = 52.0f;
     hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.72f);
     float tx = px + 12.0f;
@@ -184,12 +184,12 @@ void drawDriftDebug(Game& app) {
 
 // ドリフトのチューニングパネル（T キー）。値はその場で物理に反映され、自動保存される。
 void drawTuning(Game& app) {
-    Renderer& hud = app.renderer;
+    IRenderer& hud = *app.renderer;
     const float pw = 540.0f;
     const float rowH = 34.0f;
     const float ph = 58.0f + rowH * float(kTuneItemCount) + 44.0f;
-    const float px = (float(hud.width) - pw) * 0.5f;
-    const float py = (float(hud.height) - ph) * 0.5f - 30.0f;
+    const float px = (float(hud.width()) - pw) * 0.5f;
+    const float py = (float(hud.height()) - ph) * 0.5f - 30.0f;
     hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.85f);
     hud.drawText(px + 20, py + 14, 2.2f, "DRIFT TUNING", 1.0f, 0.62f, 0.2f, 1);
     char line[96];
@@ -227,7 +227,7 @@ void drawTuning(Game& app) {
 }
 
 void drawHud(Game& app) {
-    Renderer& hud = app.renderer;
+    IRenderer& hud = *app.renderer;
     hud.beginHud();
     char line[96];
     // 速度表示はベクトルの大きさ。ドリフト中は前方向成分だけだと実際より遅く見える。
@@ -237,7 +237,7 @@ void drawHud(Game& app) {
     hud.drawText(24, 22, 4.0f, line, 0.95f, 0.96f, 0.98f, 1);
 
     std::snprintf(line, sizeof(line), "FPS %d", int(std::lround(app.fpsSm)));
-    hud.drawText(float(app.renderer.width) - 118.0f, float(app.renderer.height) - 56.0f, 2.2f, line, 0.85f, 0.88f, 0.92f, 1);
+    hud.drawText(float(app.renderer->width()) - 118.0f, float(app.renderer->height()) - 56.0f, 2.2f, line, 0.85f, 0.88f, 0.92f, 1);
 
     if (!app.race.timing) {
         std::snprintf(line, sizeof(line), "OUT LAP");
@@ -274,8 +274,8 @@ void drawHud(Game& app) {
         std::snprintf(line, sizeof(line), "DRIFT %d DEG", deg);
         float scale = 4.0f;
         float textW = float(std::strlen(line)) * 6.0f * scale;
-        hud.drawText((float(hud.width) - textW) * 0.5f, 20, scale, line, 1.0f, 0.62f, 0.2f, 1);
-        float cx = float(hud.width) * 0.5f;
+        hud.drawText((float(hud.width()) - textW) * 0.5f, 20, scale, line, 1.0f, 0.62f, 0.2f, 1);
+        float cx = float(hud.width()) * 0.5f;
         hud.addQuad(cx - 130, 58, cx + 130, 66, 0.02f, 0.03f, 0.05f, 0.6f);
         float fill = clampf(app.car.slipAngle / 1.05f, -1.0f, 1.0f) * 130.0f;
         float fx0 = fill < 0 ? cx + fill : cx;
@@ -285,41 +285,41 @@ void drawHud(Game& app) {
         std::snprintf(line, sizeof(line), "SCORE %d  CHAIN %d M",
                       static_cast<int>(app.car.driftScore), static_cast<int>(app.car.driftChain));
         float subW = float(std::strlen(line)) * 6.0f * 2.0f;
-        hud.drawText((float(hud.width) - subW) * 0.5f, 76, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
+        hud.drawText((float(hud.width()) - subW) * 0.5f, 76, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
     } else if (std::fabs(app.car.slipAngle) > 0.15f && app.car.speed > 5.0f) {
         // ドリフト判定ではないが実際に滑っているとき（芝など）。
         int deg = static_cast<int>(std::lround(std::fabs(app.car.slipAngle) * 57.29578f));
         std::snprintf(line, sizeof(line), "SLIDE %d DEG", deg);
         float scale = 3.0f;
         float textW = float(std::strlen(line)) * 6.0f * scale;
-        hud.drawText((float(hud.width) - textW) * 0.5f, 22, scale, line, 0.95f, 0.85f, 0.3f, 1);
+        hud.drawText((float(hud.width()) - textW) * 0.5f, 22, scale, line, 0.95f, 0.85f, 0.3f, 1);
     }
 
     const char* camName = "CHASE";
     if (app.camera.mode == 1) camName = "CLOSE";
     if (app.camera.mode == 2) camName = "FAR";
     if (app.camera.mode == 3) camName = "DRIVER";
-    hud.drawText(float(hud.width) - 140, 22, 2.0f, camName, 0.8f, 0.84f, 0.88f, 1);
+    hud.drawText(float(hud.width()) - 140, 22, 2.0f, camName, 0.8f, 0.84f, 0.88f, 1);
 
 #ifndef __EMSCRIPTEN__
     if (app.showHelp) {
-        hud.drawText(24, float(hud.height) - 102, 1.7f,
+        hud.drawText(24, float(hud.height()) - 102, 1.7f,
                      "W/UP ACCEL  S/DOWN BRAKE  A/D STEER  SPACE/SHIFT/CTRL DRIFT  R RESET  C CAMERA  F FULLSCREEN  P PAUSE  B DEBUG  T TUNE",
                      0.9f, 0.92f, 0.94f, 1);
-        hud.drawText(24, float(hud.height) - 78, 1.7f,
+        hud.drawText(24, float(hud.height()) - 78, 1.7f,
                      "KEYBOARD TWIN-STICK: A/D STEER PLUS ARROW KEYS AS DRIFT STICK",
                      0.75f, 0.8f, 0.84f, 1);
-        hud.drawText(24, float(hud.height) - 54, 1.7f,
+        hud.drawText(24, float(hud.height()) - 54, 1.7f,
                      "PAD: RT ACCEL  LT BRAKE  L-STICK STEER  R-STICK OR B/LB/RB DRIFT  Y CAMERA",
                      0.75f, 0.8f, 0.84f, 1);
-        hud.drawText(24, float(hud.height) - 30, 1.7f,
+        hud.drawText(24, float(hud.height()) - 30, 1.7f,
                      "MOUSE: DURING DRIFT, SLIDE FROM DRIFT-START POS = DRIFT STICK (FARTHER = MORE ANGLE)",
                      0.75f, 0.8f, 0.84f, 1);
     }
 #endif
-    hud.drawText(float(hud.width) - 250, float(hud.height) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
+    hud.drawText(float(hud.width()) - 250, float(hud.height()) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
     if (app.paused) {
-        hud.drawText(float(hud.width) * 0.5f - 70, float(hud.height) * 0.45f, 5.0f, "PAUSE", 1, 0.95f, 0.9f, 1);
+        hud.drawText(float(hud.width()) * 0.5f - 70, float(hud.height()) * 0.45f, 5.0f, "PAUSE", 1, 0.95f, 0.9f, 1);
     }
     drawMinimap(app);
 #ifdef __EMSCRIPTEN__

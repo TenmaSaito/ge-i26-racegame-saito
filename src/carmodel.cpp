@@ -8,7 +8,7 @@
 
 #include "car.hpp"     // kCarSpecs, driftTuning
 #include "game.hpp"
-#include "tuning.hpp"  // clampTuning, saveTuning
+#include "tuning.hpp"  // clampTuning, serializeTuning
 
 void buildCarNose(CpuMesh& mesh) {
     const Vec3 red{0.72f, 0.08f, 0.09f};
@@ -34,6 +34,9 @@ void applyCarSpec(Game& app, int index) {
     app.car.steerMul = spec.steerMul;
     driftTuning = spec.tuning;
     clampTuning();
-    saveTuning();
+    // 保存は Game の差し込み口経由 (実務は外側)。この層は保存先を知らない。
+    if (app.saveTuningText) {
+        app.saveTuningText(serializeTuning());
+    }
 }
 

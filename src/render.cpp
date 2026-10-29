@@ -179,7 +179,50 @@ int glyphIndex(char c) {
 
 }  // namespace
 
-bool Renderer::init() {
+
+// ---------------------------------------------------------------------------
+// GlRenderer: IRenderer の OpenGL 実装 (外側の層)。
+// シェーダ文字列・GL オブジェクト・描画状態はすべてこの実装の中に閉じる。
+// ---------------------------------------------------------------------------
+struct GlRenderer final : IRenderer {
+    int w = 1280;
+    int h = 720;
+
+    bool init() override;
+    void resize(int w, int h) override;
+    int width() const override { return w; }
+    int height() const override { return h; }
+    void clearFrame() override;
+    void drawSky() override;
+    void beginWorld(const Mat4& viewProj, Vec3 cameraPos) override;
+    void draw(const GpuMesh& mesh, const Mat4& model) override;
+    void drawDynamic(const CpuMesh& mesh) override;
+    void beginHud() override;
+    void addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) override;
+    void drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a) override;
+    void drawText(float x, float y, float scale, const char* text, float r, float g, float b, float a) override;
+    void flushHud() override;
+    GpuMesh upload(const CpuMesh& mesh) override;
+
+    unsigned worldProgram = 0;
+    unsigned skyProgram = 0;
+    unsigned hudProgram = 0;
+    unsigned dummyVao = 0;
+    unsigned hudVao = 0;
+    unsigned hudVbo = 0;
+    unsigned hudIbo = 0;
+    unsigned dynVao = 0;
+    unsigned dynVbo = 0;
+    unsigned dynIbo = 0;
+    int uViewProj = -1;
+    int uModel = -1;
+    int uCamPos = -1;
+    int uOrtho = -1;
+    std::vector<float> hudVerts;
+    std::vector<unsigned> hudIndices;
+};
+
+bool GlRenderer::init() {
     glGenVertexArrays(1, &dummyVao);
     worldProgram = linkProgram(kWorldVs, kWorldFs);
     skyProgram = linkProgram(kSkyVs, kSkyFs);
@@ -208,22 +251,22 @@ bool Renderer::init() {
     glDisable(GL_CULL_FACE);
     // lookAt は左右を直すために鏡映になっている。巻き方向が反転するので、表の判定も合わせる。
     glFrontFace(GL_CW);
-    resize(width, height);
+    resize(w, h);
     return true;
 }
 
-void Renderer::clearFrame() {
+void GlRenderer::clearFrame() {
     glClearColor(0.62f, 0.74f, 0.84f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void Renderer::resize(int newWidth, int newHeight) {
-    width = newWidth > 0 ? newWidth : 1;
-    height = newHeight > 0 ? newHeight : 1;
-    glViewport(0, 0, width, height);
+void GlRenderer::resize(int newWidth, int newHeight) {
+    w = newWidth > 0 ? newWidth : 1;
+    h = newHeight > 0 ? newHeight : 1;
+    glViewport(0, 0, w, h);
 }
 
-void Renderer::drawSky() {
+void GlRenderer::drawSky() {
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glUseProgram(skyProgram);
@@ -233,7 +276,7 @@ void Renderer::drawSky() {
     glEnable(GL_DEPTH_TEST);
 }
 
-void Renderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
+void GlRenderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
     glUseProgram(worldProgram);
@@ -241,7 +284,7 @@ void Renderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
     glUniform3f(uCamPos, cameraPos.x, cameraPos.y, cameraPos.z);
 }
 
-void Renderer::draw(const GpuMesh& mesh, const Mat4& model) {
+void GlRenderer::draw(const GpuMesh& mesh, const Mat4& model) {
     if (mesh.indexCount <= 0) {
         return;
     }
@@ -250,7 +293,7 @@ void Renderer::draw(const GpuMesh& mesh, const Mat4& model) {
     glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
 }
 
-void Renderer::drawDynamic(const CpuMesh& mesh) {
+void GlRenderer::drawDynamic(const CpuMesh& mesh) {
     if (mesh.indices.empty()) {
         return;
     }
@@ -280,12 +323,12 @@ void Renderer::drawDynamic(const CpuMesh& mesh) {
     glDrawElements(GL_TRIANGLES, static_cast<int>(mesh.indices.size()), GL_UNSIGNED_INT, nullptr);
 }
 
-void Renderer::beginHud() {
+void GlRenderer::beginHud() {
     hudVerts.clear();
     hudIndices.clear();
 }
 
-void Renderer::addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
+void GlRenderer::addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
     unsigned base = static_cast<unsigned>(hudVerts.size() / 6);
     float verts[] = {
         x0, y0, r, g, b, a, x1, y0, r, g, b, a, x1, y1, r, g, b, a, x0, y1, r, g, b, a,
@@ -295,7 +338,7 @@ void Renderer::addQuad(float x0, float y0, float x1, float y1, float r, float g,
     hudIndices.insert(hudIndices.end(), idx, idx + 6);
 }
 
-void Renderer::drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a) {
+void GlRenderer::drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a) {
     float dx = x1 - x0;
     float dy = y1 - y0;
     float len = std::sqrt(dx * dx + dy * dy);
@@ -316,7 +359,7 @@ void Renderer::drawLine(float x0, float y0, float x1, float y1, float thickness,
     hudIndices.insert(hudIndices.end(), idx, idx + 6);
 }
 
-void Renderer::drawText(float x, float y, float scale, const char* text, float r, float g, float b, float a) {
+void GlRenderer::drawText(float x, float y, float scale, const char* text, float r, float g, float b, float a) {
     float pen = x;
     for (const char* cursor = text; *cursor; ++cursor) {
         char c = *cursor;
@@ -347,7 +390,7 @@ void Renderer::drawText(float x, float y, float scale, const char* text, float r
     }
 }
 
-void Renderer::flushHud() {
+void GlRenderer::flushHud() {
     if (hudIndices.empty()) {
         return;
     }
@@ -355,7 +398,7 @@ void Renderer::flushHud() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(hudProgram);
-    Mat4 ortho = orthoTopLeft(float(width), float(height));
+    Mat4 ortho = orthoTopLeft(float(w), float(h));
     glUniformMatrix4fv(uOrtho, 1, GL_FALSE, ortho.m);
     glBindVertexArray(hudVao);
     glBindBuffer(GL_ARRAY_BUFFER, hudVbo);
@@ -367,7 +410,7 @@ void Renderer::flushHud() {
     glEnable(GL_DEPTH_TEST);
 }
 
-GpuMesh Renderer::upload(const CpuMesh& mesh) {
+GpuMesh GlRenderer::upload(const CpuMesh& mesh) {
     GpuMesh gpu;
     if (mesh.indices.empty()) {
         return gpu;
@@ -390,3 +433,6 @@ GpuMesh Renderer::upload(const CpuMesh& mesh) {
     glBindVertexArray(dummyVao);
     return gpu;
 }
+
+IRenderer* createRenderer() { return new GlRenderer(); }
+void destroyRenderer(IRenderer* renderer) { delete renderer; }

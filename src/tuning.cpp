@@ -1,14 +1,13 @@
 // ============================================================================
 // tuning.cpp ― ドリフト調整値（項目表と変換・保存）
 // 役割: 調整項目の表と、テキスト形式との相互変換、保存/復元の窓口。
-//       保存先は platform 層に任せ、このファイルは形式だけを知る。
+//       このファイルは形式だけを知る (保存先には触れない)。
 // ============================================================================
 
 #include "tuning.hpp"
 
 #include "car.hpp"       // driftTuning（調整値の実データ）
 #include "geom.hpp"      // clampf
-#include "platform.hpp"  // saveSetting / loadSetting
 
 #include <cstdio>
 #include <cstdlib>
@@ -67,39 +66,5 @@ void parseTuning(const char* text) {
 }
 
 // 保存キーは旧来の localStorage キーと同名にしてある（Chrome 拡張と互換）。
-const char* kTuningKey = "racegameDriftTuning";
-
-void saveTuning() {
-    platform::saveSetting(kTuningKey, serializeTuning());
-}
-
-void loadTuning() {
-    std::string data;
-    if (platform::loadSetting(kTuningKey, data)) {
-        parseTuning(data.c_str());
-    }
-}
-
-#ifdef __EMSCRIPTEN__
-// ブラウザ版: 外部ツールが localStorage を書き換えたらライブ反映する。
-// 最後に見た内容と違うときだけ parse し直す。
-void pollExternalTuning() {
-    static std::string lastSeen;
-    static bool first = true;
-    std::string current;
-    if (!platform::loadSetting(kTuningKey, current)) {
-        return;
-    }
-    if (first) {
-        first = false;
-        lastSeen = current;
-        return;
-    }
-    if (current != lastSeen) {
-        lastSeen = current;
-        parseTuning(current.c_str());
-    }
-}
-#else
-void pollExternalTuning() {}
-#endif
+// 読み書き自体はこの層では行わない (platform / 差し込み口の担当)。
+const char* kTuningStorageKey = "racegameDriftTuning";

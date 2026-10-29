@@ -83,7 +83,7 @@ void drawSmoke(Game& app) {
                                 base + 1 + static_cast<std::uint32_t>((k + 1) % 8));
         }
     }
-    app.renderer.drawDynamic(mesh);
+    app.renderer->drawDynamic(mesh);
 }
 
 
@@ -150,6 +150,6 @@ void drawTrails(Game& app) {
             tri(a0, b1, a1, col(a.age), col(b.age), col(a.age));
         }
     }
-    if (!mesh.vertices.empty()) app.renderer.drawDynamic(mesh);
+    if (!mesh.vertices.empty()) app.renderer->drawDynamic(mesh);
 }
 

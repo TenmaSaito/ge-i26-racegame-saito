@@ -1,8 +1,9 @@
 #pragma once
 // ============================================================================
-// platform.hpp ― プラットフォーム層の宣言（OS・実行環境との境目）
-// 役割: ウィンドウと GL コンテキストの生成、ファイル読み込み、設定の保存、
-//       メインループの駆動だけを担当する。ゲームのルールはここに書かない。
+// platform.hpp ― プラットフォーム層の宣言 (最も外側の層)
+// 役割: ウィンドウと GL の生成と所有、描画実装の生成と Game への差し込み、
+//       ファイル読み込み、設定の保存、メインループの駆動だけを担当する。
+//       ゲームのルールはここに書かない。
 // 実装は platform.cpp。依存は SDL 系ライブラリのみで、Android でも
 // SDL が窓口になる。createWindow で画像・音声の下地も初期化する。
 // ============================================================================
@@ -25,7 +26,15 @@ bool loadSetting(const std::string& key, std::string& out);
 // URL クエリパラメータ（ブラウザ版のみ。それ以外は空文字）。
 std::string urlQueryParam(const char* key);
 
-// ウィンドウと GL コンテキストを作り、Renderer の初期化まで行う。
+// ページ側デバッグ欄への送信 (ブラウザのみ実働)。Game の debugSink に
+// 差し込まれる実装。
+void sendDebugText(const char* text);
+
+// フルスクリーン切替。入力アダプタ (F キー) から呼ばれる。
+void toggleFullscreen();
+
+// ウィンドウと GL コンテキストを作り、描画実装 (IRenderer) を生成して
+// Game へ差し込む。入力アダプタへのウィンドウ引き渡しもここで行う。
 bool createWindow(Game& app);
 void destroyWindow(Game& app);
 
