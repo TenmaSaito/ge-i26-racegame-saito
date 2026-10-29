@@ -48,7 +48,7 @@ void Effects::update(const Car& car, float dt) {
         return float((smokeSeed_ >> 8) & 0xFFFFu) / 65535.0f;
     };
     if (car.drifting && car.driftAmount > 0.45f && std::fabs(car.slipAngle) > 0.12f &&
-        std::fabs(car.speed) > 6.0f && !car.airborne) {
+        std::fabs(car.speed) > 6.0f) {
         float rate = 45.0f + std::min(45.0f, std::fabs(car.lateralSpeed) * 3.0f);
         smokeAcc_ += rate * dt;
         Vec3 fwd{std::sin(car.yaw), 0, std::cos(car.yaw)};
@@ -97,8 +97,7 @@ void Effects::update(const Car& car, float dt) {
                                 [](const SkidMark& m) { return m.age > kMarkLife; }),
                  marks_.end());
     // 出す条件: ドリフト中・接地している・舗装の上・それなりの速度。
-    // 空中 (airborne) ではタイヤが路面に触れていないので出さない。
-    const bool laying = car.drifting && car.driftAmount > 0.3f && !car.airborne &&
+    const bool laying = car.drifting && car.driftAmount > 0.3f &&
                         car.onAsphalt && std::fabs(car.speed) > 5.0f;
     if (laying) {
         Vec3 fwd{std::sin(car.yaw), 0, std::cos(car.yaw)};

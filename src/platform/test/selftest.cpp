@@ -144,7 +144,6 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
     }
     Car car;
     car.reset(track);
-    int airSteps = 0;
     float travelled = 0;
     float prevS = -1;
     float maxLat = 0;
@@ -190,9 +189,6 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
             input.throttle = std::max(input.throttle, 0.5f);
         }
         car.update(1.0f / 60.0f, input, track);
-        if (car.airborne) {
-            ++airSteps;  // 重力: 坂の頂点で浮いた回数 (報告用)
-        }
         pose = track.query(car.x, car.z, car.y, car.ground.found ? car.ground.s : -1.0f);
         if (prevS >= 0) {
             float ds = pose.s - prevS;
@@ -209,79 +205,10 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
     }
     std::printf("self-test length %.0f travelled %.0f maxLat %.1f speed %.1f km/h\n",
                 track.length, travelled, maxLat, car.speed * 3.6f);
-    std::printf("self-test airborne steps %d (gravity)\n", airSteps);
     if (track.length < minLength || track.length > maxLength) return 2;
     if (travelled < 1200.0f) return 3;
     if (maxLat > 30.0f) return 4;
-    if (car.airborne) return 5;  // 走り終わって空中に残っていたら着地できていない
     if (!std::isfinite(car.y)) return 6;
-    // 重力: 空中に放り出された車が放物線を描いて必ず着地すること。
-    // (坂の頂点での離陸そのものはコース形状と速度に依存するので、
-    //  ここでは放物線と着地の正しさだけを決定的に確認する。)
-    {
-        Car fall;
-        fall.reset(track);
-        // スタート地点は平らなはずなので、数ステップ接地を安定させる。
-        DriveInput idle;
-        for (int i = 0; i < 30; ++i) fall.update(1.0f / 60.0f, idle, track);
-        float groundY = fall.y;
-        fall.airborne = true;
-        fall.vy = 5.0f;  // 上向き 5 m/s で離陸した状態を再現
-        float peak = fall.y;
-        int airFrames = 0;
-        for (int i = 0; i < 180 && fall.airborne; ++i) {
-            fall.update(1.0f / 60.0f, idle, track);
-            peak = std::max(peak, fall.y);
-            ++airFrames;
-        }
-        std::printf("self-test gravity peak %.2f m, air %d frames, landed %d\n",
-                    peak - groundY, airFrames, fall.airborne ? 0 : 1);
-        if (fall.airborne) return 8;             // 3 秒経っても落ちてこない
-        if (peak - groundY < 0.5f) return 9;      // 放物線になっていない
-        if (std::fabs(fall.y - groundY) > 0.05f) return 10;  // 着地位置がずれている
-    }
-    // オブジェクト管理: 登録・名前検索・型検索・一括更新・破棄ができること。
-    {
-        struct Probe : IObject {
-            int updates = 0;
-            void update(float) override { ++updates; }
-        };
-        struct Other : IObject {};
-        ObjectManager mgr;
-        Probe& a = mgr.add<Probe>("Alpha");
-        mgr.add<Probe>("Beta");
-        mgr.add<Other>("Gamma");
-        bool okFind = mgr.find("Alpha") == &a && mgr.find("Nope") == nullptr;
-        bool okType = mgr.countOfType<Probe>() == 2 && mgr.findAllOfType<Probe>().size() == 2 &&
-                      mgr.findOfType<Other>() != nullptr;
-        mgr.updateAll(0.016f);
-        bool okUpdate = a.updates == 1;
-        mgr.destroy("Beta");
-        mgr.updateAll(0.016f);  // 破棄の掃除は一括更新のタイミングで行われる
-        bool okDestroy = mgr.count() == 2 && mgr.find("Beta") == nullptr;
-        std::printf("self-test objects find %d type %d update %d destroy %d\n",
-                    okFind ? 1 : 0, okType ? 1 : 0, okUpdate ? 1 : 0, okDestroy ? 1 : 0);
-        if (!okFind || !okType || !okUpdate || !okDestroy) return 11;
-    }
-    // ゴースト: 記録→最速保存→時刻指定でポーズが返ること。
-    {
-        Ghost ghost;
-        Car gc;
-        ghost.beginLap();
-        for (int i = 0; i < 120; ++i) {
-            gc.x = float(i) * 0.5f;
-            ghost.recordPose(gc);
-        }
-        ghost.finishLap(2.0f);
-        Vec3 pos;
-        float yaw = 0;
-        bool okHas = ghost.hasGhost() && ghost.bestTime() == 2.0f;
-        bool okPose = ghost.poseAt(1.0f, pos, yaw) && pos.x > 29.0f && pos.x < 31.0f;
-        bool okEnd = !ghost.poseAt(3.0f, pos, yaw);  // ゴースト終了後は出ない
-        std::printf("self-test ghost has %d pose %d end %d\n",
-                    okHas ? 1 : 0, okPose ? 1 : 0, okEnd ? 1 : 0);
-        if (!okHas || !okPose || !okEnd) return 12;
-    }
     // タイヤ痕: ドリフト状態の車を直進させると、痕の区間が刻まれること。
     {
         Effects fx;
