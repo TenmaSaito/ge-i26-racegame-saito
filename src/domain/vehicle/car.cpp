@@ -548,13 +548,5 @@ Mat4 carModelMatrix(const Car& car, float pitch, float roll) {
     return basis({car.x, car.y, car.z}, right, up, forward);
 }
 
-// 車種テーブル。0=バランス、1=ドリフト（曲がりやすく進入が鋭い）、
-// 2=スピード（最高速と出力が高い代わりに切れ角が小さく安定寄り）。
-const CarSpec kCarSpecs[3] = {
-    {"BALANCE", 1.00f, 1.00f, 1.00f,
-     DriftTuning{15.0f, 1.15f, 1.00f, 0.15f, 0.95f, 9.0f, 0.0f}},
-    {"DRIFT", 0.92f, 0.90f, 1.25f,
-     DriftTuning{15.0f, 0.80f, 0.90f, 0.12f, 1.15f, 9.0f, 0.85f}},
-    {"SPEED", 1.25f, 1.18f, 0.80f,
-     DriftTuning{17.0f, 1.50f, 1.10f, 0.18f, 0.70f, 9.0f, 0.0f}},
-};
+// 車種テーブル (kCarSpecs) は constexpr として car.hpp 側に移した。
+

@@ -22,7 +22,8 @@ void TitleScene::frame(double dt) {
     if (ui.quit) {
         game_.requestQuit();
     }
-    if (ui.confirm) {
+    if (ui.confirm || ui.click) {
+        // タイトルだけはクリックでも進める (最初のフォーカス取りを兼ねる)。
         game_.requestScene(SceneId::Select);  // まずステージ/車種選択へ
         return;
     }

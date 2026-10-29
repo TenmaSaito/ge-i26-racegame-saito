@@ -156,7 +156,7 @@ UiActions pollUi(bool tuningOpen) {
             else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A) ui.confirm = true;
             else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_Y) ui.cameraNext3 = true;
         } else if (event.type == SDL_MOUSEBUTTONDOWN) {
-            ui.confirm = true;  // タイトル等でのクリック = 決定
+            ui.click = true;  // 決定とは分ける (フォーカス取りのクリックで誤爆しないため)
         }
     }
     return ui;

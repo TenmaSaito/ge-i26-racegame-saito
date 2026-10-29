@@ -27,9 +27,9 @@ void Orbit::update(Vec3 carPos, float carYaw, float carSlip, float driftAmount,
     }
     // 追跡カメラの距離感。疾走感のため既定をぐっと近づけてある
     // (車が大きく映り、路傍の木やガードレールが速く流れる)。
-    const float back[3] = {4.6f, 3.2f, 10.5f};   // 車の後方への距離
-    const float up[3] = {1.8f, 1.2f, 4.6f};      // 高さ
-    const float ahead[3] = {5.5f, 4.5f, 9.0f};   // 注視点の前方への距離
+    static constexpr float back[3] = {4.6f, 3.2f, 10.5f};   // 車の後方への距離
+    static constexpr float up[3] = {1.8f, 1.2f, 4.6f};      // 高さ
+    static constexpr float ahead[3] = {5.5f, 4.5f, 9.0f};   // 注視点の前方への距離
     // ドリフト中は車体の向きではなく進行方向寄りにカメラを向ける。
     // 車がカニ走りしても視線が置いていかれず、滑っている感じが伝わる。
     float heading = carYaw + carSlip * 0.55f * driftAmount;

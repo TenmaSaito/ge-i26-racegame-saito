@@ -16,7 +16,7 @@ public:
     virtual void build(CpuMesh& mesh, Vec3 base, float scale, unsigned seed, float groundY) const = 0;
 
 protected:
-    static float hash01(unsigned h) {
+    static constexpr float hash01(unsigned h) {
         h ^= h >> 16;
         h *= 2246822519u;
         h ^= h >> 13;

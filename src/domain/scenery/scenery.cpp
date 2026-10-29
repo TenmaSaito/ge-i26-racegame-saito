@@ -6,7 +6,7 @@
 
 namespace {
 
-unsigned treeHash(int index, float side) {
+constexpr unsigned treeHash(int index, float side) {
     unsigned h = unsigned(index + 1) * 2654435761u;
     if (side > 0) h ^= 0x9E3779B9u;
     h ^= h >> 15;
