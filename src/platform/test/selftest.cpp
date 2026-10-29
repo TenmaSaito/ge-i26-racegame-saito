@@ -9,6 +9,7 @@
 #include "car.hpp"
 #include "effects.hpp"  // タイヤ痕の生成テスト用
 #include "ghost.hpp"    // Ghost の検証用
+#include "race.hpp"     // Race (ロケットスタート検証用)
 #include "object.hpp"   // ObjectManager の検証用
 #include "scenery.hpp"  // SceneryBuilder (地形) の検証用
 #include "track.hpp"
@@ -254,6 +255,19 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         for (int i = 0; i < 30; ++i) {
             fx.update(scrape, 1.0f / 60.0f);
         }
+    {
+        // ロケットスタート: 溜めありで発動し、溜めなしでは発動しないこと。
+        Race r1;
+        r1.startCountdown();
+        r1.setLaunchHeld(true);
+        for (int i = 0; i < 130; ++i) r1.tick(10.0f, 1000.0f, 1.0f / 60.0f);
+        if (!(r1.launchBoost() > 0.0f && r1.launchPower() > 0.55f)) return 20;
+        Race r2;
+        r2.startCountdown();
+        for (int i = 0; i < 130; ++i) r2.tick(10.0f, 1000.0f, 1.0f / 60.0f);
+        if (r2.launchBoost() != 0.0f) return 21;
+        std::printf("self-test launch charge/boost ok\n");
+    }
         std::printf("self-test sparks %d\n", fx.sparkCount());
         if (fx.sparkCount() <= 0) return 14;
     }

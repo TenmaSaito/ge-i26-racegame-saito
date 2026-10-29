@@ -28,17 +28,29 @@ void buildTailLamps(CpuMesh& mesh, Vec3 color) {
 
 // 車体の作り込み。本体 (buildCarBody) の上に、ガラス・空力部品・
 // 細部の箱を足して「車らしさ」を増やす。すべて軸平行の箱で構成する。
-void buildCarDetails(CpuMesh& mesh) {
+Vec3 carSpecColor(int spec) {
+    // 車種のボディ色。性能タイプが色でも判別できるようにする。
+    static const Vec3 palette[3] = {
+        {0.72f, 0.08f, 0.09f},  // BALANCE: 赤
+        {0.10f, 0.28f, 0.78f},  // DRIFT: 青
+        {0.88f, 0.45f, 0.06f},  // SPEED: 橙
+    };
+    return palette[spec < 0 ? 0 : (spec > 2 ? 2 : spec)];
+}
+
+void buildCarDetails(CpuMesh& mesh, int spec) {
     const Vec3 glass{0.09f, 0.13f, 0.19f};   // キャノピーのガラス色
     const Vec3 carbon{0.12f, 0.12f, 0.13f};  // カーボン部品
-    const Vec3 red{0.72f, 0.08f, 0.09f};     // ボディ色 (本体と合わせる)
+    const Vec3 red = carSpecColor(spec);     // ボディ色 (本体と合わせる)
     const Vec3 metal{0.55f, 0.56f, 0.58f};   // 金属色 (排気管)
     const Vec3 lamp{0.95f, 0.95f, 0.85f};    // ヘッドライト色
     // キャノピー (ガラス) と屋根のパネル。
     mesh.addBox({-0.58f, 1.00f, -0.30f}, {0.58f, 1.24f, 0.80f}, glass);
     mesh.addBox({-0.40f, 1.24f, -0.10f}, {0.40f, 1.30f, 0.60f}, red);
-    // ルーフ後方のフィン (アンテナ兼スタビライザ)。
-    mesh.addBox({-0.03f, 1.02f, -1.25f}, {0.03f, 1.34f, -0.95f}, red);
+    // ルーフ後方のフィン (アンテナ兼スタビライザ)。SPEED は空力優先で省く。
+    if (spec != 2) {
+        mesh.addBox({-0.03f, 1.02f, -1.25f}, {0.03f, 1.34f, -0.95f}, red);
+    }
     // サイドポッド (車体側面の張り出し)。
     for (int s = -1; s <= 1; s += 2) {
         float x0 = s < 0 ? -1.02f : 0.88f;
@@ -56,6 +68,18 @@ void buildCarDetails(CpuMesh& mesh) {
         mesh.addBox({float(s) * 0.45f - 0.16f, 0.40f, 2.35f},
                     {float(s) * 0.45f + 0.16f, 0.47f, 2.38f}, lamp);
     }
+    if (spec == 1) {
+        // DRIFT: サイドスカート (低く構えた印象にする)。
+        for (int sd = -1; sd <= 1; sd += 2) {
+            float x0 = sd < 0 ? -1.06f : 0.88f;
+            float x1 = sd < 0 ? -0.88f : 1.06f;
+            mesh.addBox({x0, 0.14f, -1.3f}, {x1, 0.32f, 1.3f}, carbon);
+        }
+    }
+    if (spec == 2) {
+        // SPEED: フロントスプリッタ (ノーズ下の板) を追加。
+        mesh.addBox({-0.95f, 0.13f, 2.28f}, {0.95f, 0.22f, 2.62f}, carbon);
+    }
     // リアディフューザー (後端下部の整流板) と縦フィン。
     mesh.addBox({-0.80f, 0.16f, -2.32f}, {0.80f, 0.34f, -2.02f}, carbon);
     for (int i = -1; i <= 1; ++i) {
@@ -71,8 +95,8 @@ void buildCarDetails(CpuMesh& mesh) {
 
 // ホイールの作り込み。中心にアクセント色のハブを足す (回転対称なので
 // ホイールが回っても違和感がない)。
-void buildWheelDetails(CpuMesh& mesh) {
-    const Vec3 accent{0.80f, 0.16f, 0.16f};
+void buildWheelDetails(CpuMesh& mesh, int spec) {
+    const Vec3 accent = carSpecColor(spec);  // ハブ色もボディに合わせる
     const int seg = 10;
     const float radius = 0.10f;
     const float halfW = 0.17f;

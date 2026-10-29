@@ -54,19 +54,30 @@ void RaceScene::frame(double dtSeconds) {
     if (ui.cameraNext) app.camera().cycle(4);
     if (ui.cameraNext3) app.camera().cycle(3);
     if (ui.pauseToggle) app.setPaused(!app.paused());
+    if (app.paused() && ui.tuningToggle) {
+        // ポーズ中の T はタイトルへ戻る (調整パネルの切替より優先)。
+        app.setPaused(false);
+        app.requestScene(SceneId::Title);
+        return;
+    }
     if (ui.helpToggle) app.setShowHelp(!app.showHelp());
     if (ui.debugToggle) app.setShowDriftDebug(!app.showDriftDebug());
-    if (ui.carSpec >= 0) app.applyCarSpec(ui.carSpec);
+    // 車種 (1/2/3) は選択画面でのみ変更する。レース中の誤操作で
+    // 特性が突然変わらないように、ここでは受け付けない。
 
     PadPulse padPulse;
-    DriveInput input = input::sampleDrive(padPulse, app.car().drifting);
-    app.setLastInput(input);
+    DriveInput rawInput = input::sampleDrive(padPulse, app.car().drifting);
+    app.setLastInput(rawInput);
+    DriveInput input = rawInput;
     if (app.showTuning()) {
         input = DriveInput{};  // チューニング中は矢印キーを運転に使わない
+    }
     if (app.race().counting()) {
-        input = DriveInput{};  // カウントダウン中はスタート待ち (空ぶかしも無し)
+        // カウントダウン中は車を動かせない。ただし生のスロットルは
+        // 空ぶかしの音とロケットスタートの溜めに使うので rawInput に残す。
+        input = DriveInput{};
     }
-    }
+    app.race().setLaunchHeld(app.race().counting() && rawInput.throttle > 0.25f);
     if (padPulse.reset) reset = true;
     if (padPulse.pause) app.setPaused(!app.paused());
     if (padPulse.camera) app.camera().cycle(3);
@@ -94,6 +105,12 @@ void RaceScene::frame(double dtSeconds) {
         int guard = 0;
         while (accumulator_ >= kFixedStepSec && guard < 8) {
             car.update(float(kFixedStepSec), input, app.track());
+            if (app.race().launchBoost() > 0 && car.speed < 42.0f) {
+                // ロケットスタート: GO 直後だけ、溜めに応じた加速を上乗せ。
+                // 序盤の速度域だけに効かせ、最高速は車の性能のままにする。
+                float fade = app.race().launchBoost() / 0.85f;
+                car.speed += app.race().launchPower() * 30.0f * float(kFixedStepSec) * fade;
+            }
             app.race().tick(car.ground.s, app.track().length, float(kFixedStepSec));
             // ゴースト: 計測が始まったら記録開始、計測中は毎ステップ記録、
             // 周回が完了したら最速判定つきで締める。
@@ -145,6 +162,10 @@ void RaceScene::frame(double dtSeconds) {
         // load に下限を持たせ、レース中は常時鳴らす (停止合図は 0,0)。
         if (app.paused()) {
             app.setEngine(0, 0);
+        } else if (app.race().counting()) {
+            // カウント中は空ぶかし: 踏み込みで回転が少し上がり、音も張る。
+            float rev = clampf(rawInput.throttle, 0.0f, 1.0f);
+            app.setEngine(0.10f + rev * 0.30f, 0.15f + rev * 0.85f);
         } else {
             float rpm = clampf(std::fabs(car.speed) / 58.0f, 0.0f, 1.0f);
             float load = 0.12f + clampf(input.throttle, 0.0f, 1.0f) * 0.88f;

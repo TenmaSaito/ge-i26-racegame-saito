@@ -17,12 +17,29 @@ void Race::tick(float s, float length, float dt) {
     if (goFlash_ > 0) {
         goFlash_ -= dt;
     }
+    if (launchBoost_ > 0) {
+        launchBoost_ -= dt;
+    }
     if (countdown_ > 0) {
+        // ロケットスタートの溜め: 踏み続けると約 1.1 秒で満タン、
+        // 離すと素早く冷める。満タン近くで GO を迎えると発動する。
+        if (launchHeld_) {
+            launchCharge_ += dt / 1.1f;
+            if (launchCharge_ > 1.0f) launchCharge_ = 1.0f;
+        } else {
+            launchCharge_ -= dt * 2.2f;
+            if (launchCharge_ < 0.0f) launchCharge_ = 0.0f;
+        }
         countdown_ -= dt;
         prevS_ = s;
         if (countdown_ <= 0) {
             countdown_ = 0;
             goFlash_ = kGoFlash;
+            if (launchCharge_ > 0.55f) {
+                launchBoost_ = 0.85f;
+                launchPower_ = launchCharge_;
+            }
+            launchCharge_ = 0;
         }
         return;
     }

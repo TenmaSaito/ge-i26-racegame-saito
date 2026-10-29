@@ -22,10 +22,21 @@ public:
     void startCountdown() {
         countdown_ = kCountdownTotal;
         goFlash_ = 0;
+        launchCharge_ = 0;
+        launchHeld_ = false;
+        launchBoost_ = 0;
+        launchPower_ = 0;
     }
     bool counting() const { return countdown_ > 0; }       // カウント中か
     float countdownLeft() const { return countdown_; }     // 残り秒
     float goFlash() const { return goFlash_; }             // GO! の残り秒
+
+    // ロケットスタート: カウント中にスロットルを踏み続けるとチャージが
+    // 溜まり、GO の瞬間に溜めに応じた加速が付く (スタートダッシュ)。
+    void setLaunchHeld(bool held) { launchHeld_ = held; }  // 踏んでいるか
+    float launchCharge() const { return launchCharge_; }   // 溜め 0..1
+    float launchBoost() const { return launchBoost_; }     // 残りブースト秒
+    float launchPower() const { return launchPower_; }     // 発動時の溜め量
 
     int completed() const { return completed_; }  // 完了した周回数
     bool timing() const { return timing_; }       // 計測中か (1 周目は OUT LAP)
@@ -44,4 +55,8 @@ private:
     float prevS_ = -1;     // 前ステップの s (巻き戻り検出用、-1 は未設定)
     float countdown_ = 0;  // カウントダウン残り秒 (0 は数えていない)
     float goFlash_ = 0;    // GO! 表示の残り秒
+    float launchCharge_ = 0;  // ロケットスタートの溜め 0..1
+    bool launchHeld_ = false; // カウント中にスロットルを踏んでいるか
+    float launchBoost_ = 0;   // ブーストの残り秒
+    float launchPower_ = 0;   // 発動時に決まった溜め量
 };

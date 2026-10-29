@@ -53,7 +53,7 @@ void main() {
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 sun = normalize(vec3(0.35, 0.86, 0.28));
-    float light = 0.36 + 0.64 * max(dot(n, sun), 0.0);
+    float light = 0.47 + 0.53 * max(dot(n, sun), 0.0);
     vec3 color = vColor * light;
     float dist = distance(vWorld, uCamPos);
     float fog = clamp((dist - 90.0) / 1500.0, 0.0, 1.0);

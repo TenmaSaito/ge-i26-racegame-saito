@@ -283,15 +283,40 @@ void Hud::draw(Game& app) {
         hud.drawText((float(app.renderer()->width()) - w) * 0.5f,
                      float(app.renderer()->height()) * 0.30f, scale, line,
                      1.0f, 0.96f, 0.86f, pop);
+        hud.drawText((float(app.renderer()->width()) - 27.0f * 6.6f) * 0.5f,
+                     float(app.renderer()->height()) * 0.46f, 2.0f,
+                     "HOLD THROTTLE: CHARGE LAUNCH", 0.85f, 0.88f, 0.92f, 0.9f);
+        // ロケットスタートの溜め: スロットルを踏み続けるとバーのように
+        // 伸びる。半分 (0.55) を超えると色が変わり、GO で発動する。
+        float charge = app.race().launchCharge();
+        if (charge > 0.02f) {
+            int filled = int(charge * 10.0f + 0.5f);
+            char bar[16];
+            for (int i = 0; i < 10; ++i) bar[i] = i < filled ? '|' : '.';
+            bar[10] = '\0';
+            bool armed = charge > 0.55f;
+            float bw = 59.0f * 3.0f;
+            hud.drawText((float(app.renderer()->width()) - bw) * 0.5f,
+                         float(app.renderer()->height()) * 0.52f, 3.0f, bar,
+                         armed ? 1.0f : 0.75f, armed ? 0.55f : 0.85f, armed ? 0.25f : 0.9f, 1);
+        }
     } else if (app.race().goFlash() > 0) {
         float p = 1.0f - app.race().goFlash() / Race::kGoFlash;  // 0→1
         float q = p * 2.4f; if (q > 1.0f) q = 1.0f;
         float pop = 1.0f - (1.0f - q) * (1.0f - q) * (1.0f - q);
         float scale = 13.0f * (0.35f + 0.65f * pop) * (1.0f + p * 0.12f);
-        float w = 17.0f * scale;  // "GO!" = (3*6-1) * scale
-        hud.drawText((float(app.renderer()->width()) - w) * 0.5f,
-                     float(app.renderer()->height()) * 0.30f, scale, "GO!",
-                     0.55f, 1.0f, 0.60f, 1.0f - p * p * 0.65f);
+        if (app.race().launchPower() > 0.55f) {
+            // ロケットスタート成功: 溜めが足りていたら専用の表示にする。
+            float w = 77.0f * scale * 0.62f;  // "ROCKET START!" 13 文字ぶん
+            hud.drawText((float(app.renderer()->width()) - w) * 0.5f,
+                         float(app.renderer()->height()) * 0.30f, scale * 0.62f, "ROCKET START!",
+                         1.0f, 0.62f, 0.25f, 1.0f - p * p * 0.65f);
+        } else {
+            float w = 17.0f * scale;  // "GO!" = (3*6-1) * scale
+            hud.drawText((float(app.renderer()->width()) - w) * 0.5f,
+                         float(app.renderer()->height()) * 0.30f, scale, "GO!",
+                         0.55f, 1.0f, 0.60f, 1.0f - p * p * 0.65f);
+        }
     }
 
     char best[32];
@@ -299,7 +324,7 @@ void Hud::draw(Game& app) {
     std::snprintf(line, sizeof(line), "BEST %s", best);
     hud.drawText(24, 90, 2.0f, line, 0.75f, 0.8f, 0.7f, 1);
 
-    std::snprintf(line, sizeof(line), "CAR %s  [1/2/3]", kCarSpecs[app.carSpec()].name);
+    std::snprintf(line, sizeof(line), "CAR %s", kCarSpecs[app.carSpec()].name);
     hud.drawText(24, 142, 2.0f, line, 0.8f, 0.85f, 0.9f, 1);
 
     int percent = static_cast<int>(app.car().ground.s / app.track().length * 100.0f);
@@ -366,6 +391,10 @@ void Hud::draw(Game& app) {
     hud.drawText(float(hud.width()) - 250, float(hud.height()) - 28, 1.6f, "(C) OSM / GSI", 0.85f, 0.88f, 0.9f, 1);
     if (app.paused()) {
         hud.drawText(float(hud.width()) * 0.5f - 70, float(hud.height()) * 0.45f, 5.0f, "PAUSE", 1, 0.95f, 0.9f, 1);
+        hud.drawText(float(hud.width()) * 0.5f - 105, float(hud.height()) * 0.45f + 52, 2.2f,
+                     "ESC: RESUME", 0.9f, 0.9f, 0.9f, 1);
+        hud.drawText(float(hud.width()) * 0.5f - 105, float(hud.height()) * 0.45f + 76, 2.2f,
+                     "T: TITLE", 0.9f, 0.9f, 0.9f, 1);
     }
     drawMinimap(app);
 #ifdef __EMSCRIPTEN__

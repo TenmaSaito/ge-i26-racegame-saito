@@ -195,7 +195,7 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
                 }
             }
             // 木 (中景): 斜面の森。約 8m 間隔、横 50〜130m。
-            if (i % 3 == 0 && (h % 100u) < 86u) {
+            if (i % 4 == 0 && (h % 100u) < 84u) {
                 const float lat = 55.0f + float((h >> 6) % 100u) / 100.0f * 110.0f;
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = terrainHeightAt(pos.x, pos.z) - 0.15f;
@@ -207,8 +207,8 @@ std::vector<SceneryChunk> SceneryBuilder::build(ObjectManager& objects, int samp
             }
             // 丘の木: 平らな帯の外 (180〜680m) にもまばらに生やす。
             // 地形の上に立つので、高さは terrainHeightAt で決める。
-            if (i % 6 == 0 && (h % 100u) < 80u) {
-                const float lat = 130.0f + float((h >> 3) % 100u) / 100.0f * 390.0f;
+            if (i % 8 == 0 && (h % 100u) < 72u) {
+                const float lat = 140.0f + float((h >> 3) % 100u) / 100.0f * 320.0f;
                 Vec3 pos = pointAt(i, side * lat);
                 pos.y = terrainHeightAt(pos.x, pos.z);
                 if (clearOfOtherRoad(pos, 6.0f, pos.y, i)) {
@@ -352,10 +352,11 @@ float SceneryBuilder::legProfile(const TrackPose& q) const {
         const float phase = q.lateral >= 0.0f ? 0.0f : 2.1f;  // 左右で位相をずらす
         float vf = 0.62f + 0.38f * std::sin(6.2831853f * 2.0f * t + phase) +
                    0.18f * std::sin(6.2831853f * 5.0f * t + phase * 2.0f);
-        vf = vf < 0.25f ? 0.25f : (vf > 1.15f ? 1.15f : vf);
+        vf = vf < 0.25f ? 0.25f : (vf > 1.02f ? 1.02f : vf);
         // 立ち上がりは S 字に: 麓 (d 小) では緩くして芝の縁へ被せない。
-        const float riseBase = 1.0f - std::exp(-d / 110.0f);
-        y += 95.0f * std::pow(riseBase, 1.6f) * vf;
+        // 高さと勾配は控えめにして、進行方向の視界を壁で塞がない。
+        const float riseBase = 1.0f - std::exp(-d / 135.0f);
+        y += 74.0f * std::pow(riseBase, 1.6f) * vf;
         if (lat > 500.0f) {
             const float u = std::min((lat - 500.0f) / 1100.0f, 1.0f);
             const float nn = std::sin(6.2831853f * 3.0f * t + 2.0f * std::sin(lat * 0.004f));
@@ -531,7 +532,7 @@ CpuMesh SceneryBuilder::buildBackdrop() const {
     // 内側: 細かい格子 (12m、道路脇の斜面をなめらかに)。
     const float ix0 = minX - 260.0f, iz0 = minZ - 260.0f;
     const float ix1 = maxX + 260.0f, iz1 = maxZ + 260.0f;
-    buildGrid(ix0, iz0, ix1, iz1, 12.0f, 0.0f);
+    buildGrid(ix0, iz0, ix1, iz1, 13.0f, 0.0f);
     // 外側: 粗い格子 (80m) を内側の四辺の外にだけ敷く。全面に敷くと、
     // 丘の上の頂点同士を結ぶ巨大な三角形が内側の谷や路面を屋根のように
     // 覆ってしまう (実際に車が埋まった)。帯は必ず内側に触れない。

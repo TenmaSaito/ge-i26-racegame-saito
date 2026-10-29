@@ -59,6 +59,25 @@ void Game::applyCarSpec(int index) {
     driftTuning = spec.tuning;
     clampTuning();
     saveTuningNow();
+    rebuildCarMeshes();  // 色と形も車種に合わせる
+}
+
+// 車の見た目 (ボディ/ホイール/影) を現在の車種で作り直す。
+void Game::rebuildCarMeshes() {
+    if (!renderer_) {
+        return;  // 初期化前 (applyCarSpec が先に呼ばれた場合) は何もしない
+    }
+    CpuMesh body;
+    CpuMesh wheel;
+    CpuMesh shadow;
+    buildCarBody(body, carSpec_);
+    buildCarDetails(body, carSpec_);   // キャノピーや空力部品などの作り込み
+    buildCarWheel(wheel);
+    buildWheelDetails(wheel, carSpec_);  // センターハブ
+    buildCarShadow(shadow);
+    body_ = renderer_->upload(body);
+    wheel_ = renderer_->upload(wheel);
+    shadow_ = renderer_->upload(shadow);
 }
 
 // 初期化: 車まわりのメッシュ (コースに依らない) を作ってアップロードし、
@@ -81,17 +100,7 @@ void Game::init() {
         lampMesh.indices.clear();
         buildTailLamps(lampMesh, {2.6f, 0.22f, 0.20f});
         lampsBright_ = renderer_->upload(lampMesh);
-    CpuMesh body;
-    CpuMesh wheel;
-    CpuMesh shadow;
-    buildCarBody(body);
-    buildCarDetails(body);   // キャノピーや空力部品などの作り込み
-    buildCarWheel(wheel);
-    buildWheelDetails(wheel);  // センターハブ
-    buildCarShadow(shadow);
-    body_ = renderer_->upload(body);
-    wheel_ = renderer_->upload(wheel);
-    shadow_ = renderer_->upload(shadow);
+    rebuildCarMeshes();
     // 初期コースの読み込み (失敗したら既定コースへ落とす)。
     if (!loadCourse(initialStem_)) {
         loadCourse("suzuka");

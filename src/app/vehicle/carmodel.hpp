@@ -12,8 +12,10 @@
 void buildCarNose(CpuMesh& mesh);
 void buildTailLamps(CpuMesh& mesh, Vec3 color);
 // 車体の作り込み (キャノピー・ミラー・サイドポッド・ディフューザー等)。
-void buildCarDetails(CpuMesh& mesh);
+void buildCarDetails(CpuMesh& mesh, int spec);
+// 車種ごとのボディ色 (0=BALANCE 赤 / 1=DRIFT 青 / 2=SPEED 橙)。
+Vec3 carSpecColor(int spec);
 // ホイールの作り込み (センターハブ)。
-void buildWheelDetails(CpuMesh& mesh);
+void buildWheelDetails(CpuMesh& mesh, int spec);
 // 車種の切り替え (applyCarSpec) は Game のメソッドへ移設した。
 // ここは形状の構築だけを担当する。

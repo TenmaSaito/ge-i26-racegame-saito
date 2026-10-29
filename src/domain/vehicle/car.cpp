@@ -1,4 +1,5 @@
 #include "car.hpp"
+#include "carmodel.hpp"  // carSpecColor
 
 #include <algorithm>
 #include <cmath>
@@ -462,17 +463,27 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
     onAsphalt = std::fabs(ground.lateral) <= track.halfWidth + 0.15f;
 }
 
-void buildCarBody(CpuMesh& mesh) {
-    const Vec3 red{0.72f, 0.08f, 0.09f};
+void buildCarBody(CpuMesh& mesh, int spec) {
+    // 車種ごとに色とリアウイングの形を少し変える (性能差の見た目表現)。
+    const Vec3 red = carSpecColor(spec);
     const Vec3 dark{0.06f, 0.06f, 0.07f};
     const Vec3 carbon{0.12f, 0.12f, 0.13f};
     mesh.addBox({-0.88f, 0.32f, -2.05f}, {0.88f, 0.62f, 2.05f}, red);
     mesh.addBox({-0.72f, 0.62f, -0.55f}, {0.72f, 1.05f, 1.05f}, red);
     mesh.addBox({-0.62f, 0.78f, -0.35f}, {0.62f, 1.02f, 0.9f}, dark);
-    mesh.addBox({-0.7f, 0.32f, 1.7f}, {0.7f, 0.5f, 2.25f}, red);
+    // ノーズ: SPEED は長く低く (空力寄り)、他は標準。
+    if (spec == 2) {
+        mesh.addBox({-0.7f, 0.30f, 1.7f}, {0.7f, 0.44f, 2.45f}, red);
+    } else {
+        mesh.addBox({-0.7f, 0.32f, 1.7f}, {0.7f, 0.5f, 2.25f}, red);
+    }
     mesh.addBox({-0.95f, 0.26f, 1.95f}, {0.95f, 0.36f, 2.35f}, carbon);
-    mesh.addBox({-0.86f, 0.85f, -2.2f}, {0.86f, 1.0f, -1.85f}, carbon);
-    mesh.addBox({-0.15f, 0.95f, -2.05f}, {0.15f, 1.15f, -1.9f}, carbon);
+    // リアウイング: DRIFT は大きく高く、SPEED は小さく低く、BALANCE は標準。
+    const float wingHalf = spec == 1 ? 1.06f : (spec == 2 ? 0.68f : 0.86f);
+    const float wingY0 = spec == 1 ? 1.04f : (spec == 2 ? 0.76f : 0.85f);
+    const float wingY1 = spec == 1 ? 1.20f : (spec == 2 ? 0.90f : 1.0f);
+    mesh.addBox({-wingHalf, wingY0, -2.2f}, {wingHalf, wingY1, -1.85f}, carbon);
+    mesh.addBox({-0.15f, 0.95f, -2.05f}, {0.15f, wingY0 + 0.02f, -1.9f}, carbon);
 }
 
 void buildCarWheel(CpuMesh& mesh) {

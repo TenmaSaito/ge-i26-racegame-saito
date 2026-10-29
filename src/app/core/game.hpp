@@ -150,6 +150,8 @@ public:
 
     // 車種を切り替える (性能倍率＋ドリフト調整値の差し替えと保存)。
     void applyCarSpec(int index);
+    // 車の見た目を現在の車種で作り直す (色・形の差し替え)。
+    void rebuildCarMeshes();
 
 private:
     // シーンを実際に切り替える (exit → 生成 → enter)。

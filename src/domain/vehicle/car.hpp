@@ -103,7 +103,7 @@ inline constexpr CarSpec kCarSpecs[3] = {
 };
 constexpr int kCarSpecCount = 3;
 
-void buildCarBody(CpuMesh& mesh);
+void buildCarBody(CpuMesh& mesh, int spec);
 void buildCarWheel(CpuMesh& mesh);
 void buildCarShadow(CpuMesh& mesh);
 Mat4 carModelMatrix(const Car& car, float pitch, float roll);
