@@ -29,6 +29,8 @@ private:
     // アキュムレータの端数で補間してから描く。
     float prevX_ = 0, prevY_ = 0, prevZ_ = 0, prevYaw_ = 0, prevSlip_ = 0;  // 1 ステップ前
     float viewX_ = 0, viewY_ = 0, viewZ_ = 0, viewYaw_ = 0, viewSlip_ = 0;  // 補間結果
+    float camSlip_ = 0;    // カメラ専用に平滑化したスリップ角 (物理値は使わない)
+    float camAmount_ = 0;  // カメラ専用に平滑化したドリフト量
     bool viewReady_ = false;  // 補間ポーズが有効か
 
     // ゴースト記録の状態管理用 (ラップ開始と完了の検出)。

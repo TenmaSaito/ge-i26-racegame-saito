@@ -61,7 +61,7 @@
 <header>
   <h1>ドリフトレース（仮）</h1>
   <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
-  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-29 · CALM + AUDIO DIAG</p>
+  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-29 · SMOOTH CAM 2</p>
 </header>
 
 <div id="wrap">
@@ -136,6 +136,7 @@ var Module=typeof Module!="undefined"?Module:{};var ENVIRONMENT_IS_WEB=typeof wi
 (function () {
   function audioContext() {
     var paths = [];
+    try { if (window.SDL2) { paths.push(SDL2.audioContext); } } catch (e) {}
     try { if (window.Module && Module.SDL) { paths.push(Module.SDL.audioContext, Module.SDL.audio && Module.SDL.audio.audioContext); } } catch (e) {}
     try { if (window.SDL) { paths.push(SDL.audioContext, SDL.audio && SDL.audio.audioContext); } } catch (e) {}
     for (var i = 0; i < paths.length; i++) { if (paths[i]) return paths[i]; }

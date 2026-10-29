@@ -155,7 +155,17 @@ void RaceScene::frame(double dtSeconds) {
     if (!app.paused()) {
         app.effects().update(car, float(elapsed));
     }
-    app.camera().update({viewX_, viewY_, viewZ_}, viewYaw_, viewSlip_, car.driftAmount,
+    // カメラの向きはスリップ角に追随するが、物理のスリップはステップ
+    // ごとに細かく揺れる (ドリフトの出入りやスティックの微入力) ため、
+    // そのまま使うと視点が小刻みに振れて車体がブルブルして見える。
+    // カメラ専用に平滑化した値を渡す (物理と車体の表示は生のまま)。
+    {
+        float kSlip = 1.0f - std::exp(-10.0f * float(elapsed));
+        float kAmt = 1.0f - std::exp(-12.0f * float(elapsed));
+        camSlip_ += (car.slipAngle - camSlip_) * kSlip;
+        camAmount_ += (car.driftAmount - camAmount_) * kAmt;
+    }
+    app.camera().update({viewX_, viewY_, viewZ_}, viewYaw_, camSlip_, camAmount_,
                         app.track(), car.ground.s, float(elapsed));
 
     // --- 音: タイヤのスリップ音 (仮) ---------------------------------------
