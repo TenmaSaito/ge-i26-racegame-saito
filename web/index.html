@@ -61,7 +61,7 @@
 <header>
   <h1>ドリフトレース（仮）</h1>
   <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
-  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-29 · CAP60 + MIRROR</p>
+  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-29 · STEADY CAM</p>
 </header>
 
 <div id="wrap">
@@ -124,5 +124,40 @@
   });
 </script>
 <script async src="racegame.js"></script>
+<script>
+// 音声の自動再生制限対策: ブラウザはユーザー操作があるまで AudioContext を
+// 止めたままにする。SDL はキー/マウス操作で再開するが、ゲームパッドだけ
+// で遊ぶと操作として数えられず無音になることがあるため、パッドのボタンも
+// 含めてあらゆる入力で再開を試みる。
+(function () {
+  function audioContext() {
+    try {
+      if (window.Module && Module.SDL && Module.SDL.audioContext) return Module.SDL.audioContext;
+      if (window.SDL && SDL.audioContext) return SDL.audioContext;
+    } catch (e) {}
+    return null;
+  }
+  function resume() {
+    var ctx = audioContext();
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+  }
+  ['pointerdown', 'keydown', 'touchstart', 'mousedown'].forEach(function (ev) {
+    window.addEventListener(ev, resume, true);
+  });
+  // ゲームパッドのボタンを監視し、押されたら再開を試みる (0.25 秒ごと)。
+  setInterval(function () {
+    try {
+      var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (var i = 0; i < pads.length; i++) {
+        var p = pads[i];
+        if (!p) continue;
+        for (var j = 0; j < p.buttons.length; j++) {
+          if (p.buttons[j].pressed) { resume(); return; }
+        }
+      }
+    } catch (e) {}
+  }, 250);
+})();
+</script>
 </body>
 </html>

@@ -338,32 +338,34 @@ void Hud::draw(Game& app) {
     }
     hud.drawText(24, 116, 2.0f, line, 0.9f, 0.9f, 0.92f, 1);
 
-    // ドリフト表示: 走行中でも目に入るよう、画面中央上に大きく出す。
-    // 下のバーはスリップ角（中央が 0、左右に最大約60度）。
+    // ドリフト表示: 画面中央下に出す (上部中央はバックミラーの場所)。
+    // バーはスリップ角（中央が 0、左右に最大約60度）。
+    // 下端の操作ヘルプ (下から約 110px) と重ならないよう、その少し上に置く。
     if (app.car().drifting) {
+        const float baseY = float(hud.height()) - 196.0f;  // 表示ブロックの上端
         int deg = static_cast<int>(std::lround(std::fabs(app.car().slipAngle) * 57.29578f));
         std::snprintf(line, sizeof(line), "DRIFT %d DEG", deg);
         float scale = 4.0f;
         float textW = float(std::strlen(line)) * 6.0f * scale;
-        hud.drawText((float(hud.width()) - textW) * 0.5f, 20, scale, line, 1.0f, 0.62f, 0.2f, 1);
+        hud.drawText((float(hud.width()) - textW) * 0.5f, baseY, scale, line, 1.0f, 0.62f, 0.2f, 1);
         float cx = float(hud.width()) * 0.5f;
-        hud.addQuad(cx - 130, 58, cx + 130, 66, 0.02f, 0.03f, 0.05f, 0.6f);
+        hud.addQuad(cx - 130, baseY + 38, cx + 130, baseY + 46, 0.02f, 0.03f, 0.05f, 0.6f);
         float fill = clampf(app.car().slipAngle / 1.05f, -1.0f, 1.0f) * 130.0f;
         float fx0 = fill < 0 ? cx + fill : cx;
         float fx1 = fill < 0 ? cx : cx + fill;
-        hud.addQuad(fx0, 58, fx1, 66, 1.0f, 0.62f, 0.2f, 0.95f);
-        hud.addQuad(cx - 1.5f, 56, cx + 1.5f, 68, 0.95f, 0.96f, 0.98f, 0.9f);
+        hud.addQuad(fx0, baseY + 38, fx1, baseY + 46, 1.0f, 0.62f, 0.2f, 0.95f);
+        hud.addQuad(cx - 1.5f, baseY + 36, cx + 1.5f, baseY + 48, 0.95f, 0.96f, 0.98f, 0.9f);
         std::snprintf(line, sizeof(line), "SCORE %d  CHAIN %d M",
                       static_cast<int>(app.car().driftScore), static_cast<int>(app.car().driftChain));
         float subW = float(std::strlen(line)) * 6.0f * 2.0f;
-        hud.drawText((float(hud.width()) - subW) * 0.5f, 76, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
+        hud.drawText((float(hud.width()) - subW) * 0.5f, baseY + 56, 2.0f, line, 1.0f, 0.8f, 0.45f, 1);
     } else if (std::fabs(app.car().slipAngle) > 0.15f && app.car().speed > 5.0f) {
         // ドリフト判定ではないが実際に滑っているとき（芝など）。
         int deg = static_cast<int>(std::lround(std::fabs(app.car().slipAngle) * 57.29578f));
         std::snprintf(line, sizeof(line), "SLIDE %d DEG", deg);
         float scale = 3.0f;
         float textW = float(std::strlen(line)) * 6.0f * scale;
-        hud.drawText((float(hud.width()) - textW) * 0.5f, 22, scale, line, 0.95f, 0.85f, 0.3f, 1);
+        hud.drawText((float(hud.width()) - textW) * 0.5f, float(hud.height()) - 190.0f, scale, line, 0.95f, 0.85f, 0.3f, 1);
     }
 
     const char* camName = "CHASE";

@@ -47,11 +47,26 @@ void Orbit::update(Vec3 carPos, float carYaw, float carSlip, float driftAmount,
         ready = true;
         return;
     }
-    // 追従は速め（15/s）。遅いと加速時にカメラだけ置いていかれて
-    // 車が画面の中で前後に泳ぐ。補間ポーズ側が滑らかなので速くても荒れない。
+    // リセット等で大きく離れていたら即座に置き直す (泳ぎ防止)。
+    Vec3 jump = eyePos - eye;
+    if (jump.x * jump.x + jump.y * jump.y + jump.z * jump.z > 900.0f) {
+        eye = eyePos;
+        look = lookPos;
+        return;
+    }
+    // 追従の平滑化は「絶対位置」ではなく「車から見たオフセット」に掛ける。
+    // 絶対位置で掛けると、補間ポーズの速度が物理ステップ境界で段々に
+    // 変わるたびに遅れ量が揺れて、車が画面の中で前後に泳いで見える。
+    // オフセットなら入力は向き (滑らかに補間される) だけに依存し、
+    // 車の移動そのものは 1:1 で目に伝わるので前後ブレが出ない。
+    // 係数 15/s は従来どおり (加速でカメラが置いていかれる感覚の調整値)。
     float blend = 1.0f - std::exp(-dt * 15.0f);
-    eye = eye + (eyePos - eye) * blend;
-    look = look + (lookPos - look) * blend;
+    Vec3 eyeOff = eye - carPos;
+    Vec3 lookOff = look - carPos;
+    eyeOff = eyeOff + ((eyePos - carPos) - eyeOff) * blend;
+    lookOff = lookOff + ((lookPos - carPos) - lookOff) * blend;
+    eye = carPos + eyeOff;
+    look = carPos + lookOff;
 }
 
 float surfaceHeightAt(const Track& track, Vec3 p, float fallbackY, float preferS) {
