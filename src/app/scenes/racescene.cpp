@@ -132,6 +132,16 @@ void RaceScene::frame(double dtSeconds) {
             accumulator_ -= kFixedStepSec;
             ++guard;
         }
+        // ステップ上限 (8回) に達して時間が余った場合は、余りを
+        // 持ち越さない。elapsed は最大 0.25 秒 = 15 ステップ分ある
+        // ため、そのまま残すと補間率 alpha が 1 を大きく超え (最大 7)、
+        // 描画ポーズが未来へ数メートル飛んでしまう。初回起動時の
+        // シェーダコンパイル等のひっかかりで起きやすく、「初回だけ
+        // ガクつく」主因になる。余分な時間は捨てて、その分だけ
+        // ゲーム内時間がゆっくり流れる扱いにする (暴走防止)。
+        if (accumulator_ > kFixedStepSec) {
+            accumulator_ = kFixedStepSec;
+        }
         // 描画ポーズの補間: 1 ステップ前と現在を端数でつなぐ。
         // 物理は 60Hz 刻みで車が約 1m ずつ進むため、ステップ値を
         // そのまま描くと、滑らかに動くカメラとの間で車が細かく
@@ -139,6 +149,8 @@ void RaceScene::frame(double dtSeconds) {
         // (以前、同速時は最新値へ寄せる方式を試したが、0/2 ステップ
         // フレームで段差が戻ってしまうため補間に戻した。)
         float alpha = float(accumulator_ / kFixedStepSec);
+        if (alpha < 0.0f) alpha = 0.0f;  // 念のため 0〜1 に制限する
+        if (alpha > 1.0f) alpha = 1.0f;  // (外挿は描画ポーズを飛ばす)
         float dx = car.x - prevX_;
         float dz = car.z - prevZ_;
         if (dx * dx + dz * dz > 400.0f) alpha = 1.0f;  // リセット等のテレポートでは補間しない
