@@ -179,6 +179,8 @@ void Game::switchScene(SceneId id) {
 // 1 フレームの進行。切り替え予約があればフレームの頭で切り替え、
 // あとは現在のシーンに委譲する (Game 自身は段取りを持たない)。
 void Game::frame(double dtSeconds) {
+    lastDt_ = float(dtSeconds);
+    ++frameNo_;
     // オブジェクトの一括更新 (動く実体が増えたらここで一斉に進む)。
     objects_.updateAll(float(dtSeconds));
     if (hasPendingScene_) {
@@ -231,19 +233,24 @@ void Game::drawWorld(Vec3 carPos, float carYaw) {
 
     // 車体の傾きは路面の平面に這わせる。前後・左右 4 点の路面高から
     // 面の傾きを求めるので、斜めに止まってもバンクと勾配の両方に合う。
-    // 傾き自体は荷重移動として少し遅れて追わせる (即応するとカクつく)。
-    {
+    // 路面高はコースのサンプル間隔 (約 4m) で折れ曲がるため、短い
+    // ベースラインで拾うと高速時に目標角度が細かく跳ねて車体が
+    // ブルブルする。前後 ±3.6m の長いベースラインで平均し、平滑化も
+    // 実フレーム時間で 6/s に強めて抑える。更新は 1 フレームに 1 回
+    // (ミラーの二度目の描画では進めない)。
+    if (tiltFrame_ != frameNo_) {
+        tiltFrame_ = frameNo_;
         Vec3 fw{std::sin(carYaw), 0, std::cos(carYaw)};
         Vec3 rt{fw.z, 0, -fw.x};
         float preferS = car_.ground.found ? car_.ground.s : -1.0f;
-        float hF = surfaceHeightAt(track_, carPos + fw * 2.2f, car_.y, preferS);
-        float hB = surfaceHeightAt(track_, carPos - fw * 2.2f, car_.y, preferS);
-        float hR = surfaceHeightAt(track_, carPos + rt * 1.0f, car_.y, preferS);
-        float hL = surfaceHeightAt(track_, carPos - rt * 1.0f, car_.y, preferS);
-        float pitchT = std::atan2(hF - hB, 4.4f);
-        float rollT = std::atan2(hR - hL, 2.0f) -
+        float hF = surfaceHeightAt(track_, carPos + fw * 3.6f, carPos.y, preferS);
+        float hB = surfaceHeightAt(track_, carPos - fw * 3.6f, carPos.y, preferS);
+        float hR = surfaceHeightAt(track_, carPos + rt * 1.3f, carPos.y, preferS);
+        float hL = surfaceHeightAt(track_, carPos - rt * 1.3f, carPos.y, preferS);
+        float pitchT = std::atan2(hF - hB, 7.2f);
+        float rollT = std::atan2(hR - hL, 2.6f) -
                       clampf(car_.lateralSpeed * 0.009f, -0.12f, 0.12f);
-        const float k = 1.0f - std::exp(-3.0f / 60.0f);
+        const float k = 1.0f - std::exp(-6.0f * lastDt_);
         bodyPitchSm_ += (pitchT - bodyPitchSm_) * k;
         bodyRollSm_ += (rollT - bodyRollSm_) * k;
     }

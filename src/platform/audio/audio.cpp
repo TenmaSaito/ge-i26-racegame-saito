@@ -214,6 +214,16 @@ public:
         }
     }
 
+    // 診断用: 素材の読み込み可否とエンジン再生状態。
+    std::string diag() const override {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "ENG %s%s DRIFT %s",
+                      engineChunks_[0] ? "OK" : "NG",
+                      (engineCh_ >= 0 && Mix_Playing(engineCh_)) ? "+PLAY" : "",
+                      drift_ ? "OK" : "NG");
+        return buf;
+    }
+
     // ドリフト音 (ロケットスタート音源のループ加工版)。ドリフト中は
     // 無限ループで鳴り続け、強さで音量が変わる。終わったらフェードアウト。
     void setSlip(float amount) override {

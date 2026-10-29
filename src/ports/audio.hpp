@@ -7,6 +7,8 @@
 //       ここへ足していく想定。
 // ============================================================================
 
+#include <string>
+
 // 音声の差し込み口。実装は platform 層 (createAudio が返す)。
 struct IAudio {
     virtual ~IAudio() = default;
@@ -16,6 +18,8 @@ struct IAudio {
     // エンジン音。rpm (0..1) で音程の段が、load (0..1) で音量が変わる。
     // 両方 0 で停止 (レース外の合図)。毎フレーム呼んでよい。
     virtual void setEngine(float rpm, float load) = 0;
+    // 診断用: 素材が読めたか・鳴っているかを短い文字列で返す (デバッグ表示用)。
+    virtual std::string diag() const = 0;
 };
 
 // 音声実装の生成と破棄 (platform 層が定義する)。

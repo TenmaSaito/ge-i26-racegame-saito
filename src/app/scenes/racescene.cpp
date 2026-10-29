@@ -130,6 +130,14 @@ void RaceScene::frame(double dtSeconds) {
         }
         // 描画ポーズの補間: 1 ステップ前と現在を端数でつなぐ。
         float alpha = float(accumulator_ / kFixedStepSec);
+        // ただし表示レートが物理 (60Hz) とほぼ同じときは、端数の位相が
+        // ゆっくりずれて補間ポーズが前後に震えて見える (60fps 上限で
+        // 特に目立つ)。その場合は端数補間をやめ、最新の物理ポーズを
+        // そのまま出す。端数補間が意味を持つのは表示が物理より速い
+        // ときだけ (余った端数を次のステップまでのつなぎに使う)。
+        if (elapsed >= kFixedStepSec * 0.85) {
+            alpha = 1.0f;
+        }
         float dx = car.x - prevX_;
         float dz = car.z - prevZ_;
         if (dx * dx + dz * dz > 400.0f) alpha = 1.0f;  // リセット等のテレポートでは補間しない

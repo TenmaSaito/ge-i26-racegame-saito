@@ -103,6 +103,8 @@ public:
     void setEngine(float rpm, float load) {
         if (audio_) audio_->setEngine(rpm, load);
     }
+    // 音声の診断文字列 (デバッグ表示用)。
+    std::string audioDiag() const { return audio_ ? audio_->diag() : std::string("AUDIO NONE"); }
     const Ghost& ghost() const { return ghost_; }
     // ゴーストを半透明で描く (計測中で保存済みがあるときだけ実働)。
     void drawGhost();
@@ -215,6 +217,9 @@ private:
 
     // 車体の傾き (drawWorld が路面平面から求めて平滑化する)。
     // 補間ポーズや物理のアキュムレータは RaceScene 側の状態になった。
+    float lastDt_ = 1.0f / 60.0f;  // 直近フレームの dt (傾き平滑化用)
+    int frameNo_ = 0;              // フレーム番号 (二重更新の防止用)
+    int tiltFrame_ = -1;           // 傾きを最後に更新したフレーム番号
     float bodyPitchSm_ = 0;       // 車体の前後傾き (平滑化済み)
     float bodyRollSm_ = 0;        // 車体の左右傾き (平滑化済み)
 };

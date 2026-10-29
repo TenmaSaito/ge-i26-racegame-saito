@@ -186,6 +186,9 @@ void Hud::drawDriftDebug(Game& app) {
         hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
         ty += lineH;
     }
+    std::snprintf(line, sizeof(line), "AUDIO: %s", app.audioDiag().c_str());
+    hud.drawText(tx, ty, 1.6f, line, 0.9f, 0.92f, 0.94f, 1);
+    ty += lineH;
     // ドリフト操作をしているのに入らないときは、理由を出す。
     const char* why = "";
     bool trying = in.drift || std::fabs(in.driftSteer) > 0.45f;

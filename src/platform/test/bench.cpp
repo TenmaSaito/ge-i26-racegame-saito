@@ -28,6 +28,10 @@ int runBenchmark(Game& app, const char* mode) {
     UiActions ui{};      // 差し込む UI 入力 (毎フレーム組み直す)
     DriveInput drive{};  // 差し込む運転入力 (自動運転)
     std::vector<char> driftFrame;  // そのフレームにドリフトしていたか
+    // 車体の傾き (ピッチ) のブルブル計測: 旧方式 (ベースライン 4.4m + 固定
+    // 3/s 平滑) と新方式 (7.2m + 6/s) で、平滑後の角度のフレーム間変動を比べる。
+    double tiltOld = 0, tiltNew = 0, tiltSqOld = 0, tiltSqNew = 0;
+    long tiltN = 0;
     float driftHold = 0;        // ドリフト継続の残り秒
     float driftCool = 0;        // 次にドリフトできるまでの秒
 
@@ -91,6 +95,28 @@ int runBenchmark(Game& app, const char* mode) {
                 drive.driftSteer = drive.steer;
             }
             driftFrame.push_back(car.drifting ? 1 : 0);
+            // 傾きの計測 (そこそこ速いときだけ意味がある)。
+            if (car.speed > 15.0f) {
+                Vec3 fw{std::sin(car.yaw), 0, std::cos(car.yaw)};
+                float preferS = car.ground.found ? car.ground.s : -1.0f;
+                auto pitchAt = [&](float base) {
+                    float hF = surfaceHeightAt(track, {car.x + fw.x * base, car.y, car.z + fw.z * base},
+                                               car.y, preferS);
+                    float hB = surfaceHeightAt(track, {car.x - fw.x * base, car.y, car.z - fw.z * base},
+                                               car.y, preferS);
+                    return std::atan2(hF - hB, base * 2.0f);
+                };
+                const float kOld = 1.0f - std::exp(-3.0f / 60.0f);
+                const float kNew = 1.0f - std::exp(-6.0f / 60.0f);
+                double prevOld = tiltOld, prevNew = tiltNew;
+                tiltOld += (pitchAt(2.2f) - tiltOld) * kOld;
+                tiltNew += (pitchAt(3.6f) - tiltNew) * kNew;
+                if (tiltN > 0) {
+                    tiltSqOld += (tiltOld - prevOld) * (tiltOld - prevOld);
+                    tiltSqNew += (tiltNew - prevNew) * (tiltNew - prevNew);
+                }
+                ++tiltN;
+            }
         }
         input::setBenchUi(&ui);
         input::setBenchDrive(&drive);
@@ -119,6 +145,11 @@ int runBenchmark(Game& app, const char* mode) {
                     int(v.size()), sum / double(v.size()), v[v.size() / 2],
                     v[size_t(v.size() * 0.95)], v.back());
     };
+    if (tiltN > 1) {
+        std::printf("  tilt jitter RMS: old=%.5f rad new=%.5f rad (n=%ld)\n",
+                    std::sqrt(tiltSqOld / double(tiltN - 1)),
+                    std::sqrt(tiltSqNew / double(tiltN - 1)), tiltN);
+    }
     std::printf("bench mode=%s\n", mode);
     stat(all, "  all  ");
     stat(drift, "  drift");
