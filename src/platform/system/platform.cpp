@@ -300,7 +300,15 @@ void destroyWindow(Game& app) {
 // 位相がずれ続けてカクついて見えるため、描画を 60 回/秒に絞る。
 // ブラウザ版は「まだ早い」フレームを間引いて rAF に任せ、ネイティブは
 // 短く眠ってから進める。長い停止の後は予定を組み直して暴走を防ぐ。
-bool gFrameCapEnabled = true;   // 上限の有効/無効 (ベンチでは切る)
+// Web 版はブラウザの rAF が表示間隔を決めるため、C++ 側でも上限を
+// 掛けると二重管理になって描画が飛ぶことがある。比較のため Web では
+// 初期オフにし、ネイティブでは従来どおり 60 上限を初期オンにする。
+// (物理はどちらも固定 60Hz のまま。bench は明示的に切り替える。)
+#ifdef __EMSCRIPTEN__
+bool gFrameCapEnabled = false;
+#else
+bool gFrameCapEnabled = true;
+#endif   // 上限の有効/無効 (ベンチでは切る)
 Uint64 gNextDue = 0;            // 次に描いてよい時刻 (性能カウンタ)
 Uint64 gLastExec = 0;           // 最後に実際に描いた時刻 (dt の基準)
 

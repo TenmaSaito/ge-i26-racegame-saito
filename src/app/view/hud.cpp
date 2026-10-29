@@ -114,14 +114,15 @@ void Hud::sendDebugToPage(Game& app) {
     std::snprintf(buf, sizeof(buf),
                   "STATE: %s\nSLIP: %.0f DEG\nLAT V: %.1f M/S\nFWD V: %.1f M/S (%.0f KM/H)\n"
                   "AMOUNT: %d %%\nCMD: %.2f\nIN: BTN %d STEER %.2f\nIN: DSTK %.2f MSE %.2f THR %.1f\n"
-                  "PAD %s\nOBJ %d TREE %d HOUSE %d BLD %d\nSCORE %d CHAIN %d M%s",
+                  "PAD %s\nOBJ %d TREE %d HOUSE %d BLD %d\nSCORE %d CHAIN %d M\nAUDIO %s%s",
                   car.drifting ? "DRIFT" : "GRIP", car.slipAngle * 57.29578f,
                   car.lateralSpeed, car.speed, car.speed * 3.6f,
                   static_cast<int>(std::lround(car.driftAmount * 100.0f)), car.driftCommand,
                   in.drift ? 1 : 0, in.steer, in.driftSteer, in.mouseDrift, in.throttle,
                   pad.c_str(),
                   static_cast<int>(app.objects().count()), sc.trees, sc.houses, sc.buildings,
-                  static_cast<int>(car.driftScore), static_cast<int>(car.driftChain), why);
+                  static_cast<int>(car.driftScore), static_cast<int>(car.driftChain),
+                  app.audioDiag().c_str(), why);
     app.sendDebug(buf);
 }
 #endif
