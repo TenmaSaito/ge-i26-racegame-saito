@@ -37,29 +37,34 @@ message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 #   selftest.cpp 自己検証（--self-test）
 # 依存ライブラリは SDL 系のみ（SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer）。
 add_executable(racegame
-    src/main.cpp
-    src/platform.cpp
-    src/race.cpp
-    src/object.cpp
-    src/ranking.cpp
-    src/ghost.cpp
-    src/selectscene.cpp
-    src/titlescene.cpp
-    src/racescene.cpp
-    src/resultscene.cpp
-    src/game.cpp
-    src/input.cpp
-    src/camera.cpp
-    src/effects.cpp
-    src/hud.cpp
-    src/tuning.cpp
-    src/carmodel.cpp
-    src/track.cpp
-    src/scenery.cpp
-    src/car.cpp
-    src/render.cpp
-    src/selftest.cpp
+    src/platform/main.cpp
+    src/platform/platform.cpp
+    src/platform/render.cpp
+    src/platform/input.cpp
+    src/platform/selftest.cpp
+    src/app/game.cpp
+    src/app/hud.cpp
+    src/app/camera.cpp
+    src/app/effects.cpp
+    src/app/race.cpp
+    src/app/ghost.cpp
+    src/app/ranking.cpp
+    src/app/object.cpp
+    src/app/carmodel.cpp
+    src/app/titlescene.cpp
+    src/app/selectscene.cpp
+    src/app/racescene.cpp
+    src/app/resultscene.cpp
+    src/domain/car.cpp
+    src/domain/track.cpp
+    src/domain/scenery.cpp
+    src/domain/tuning.cpp
 )
+# フォルダ分け (domain/app/ports/platform) に対して include パスを通す。
+# これにより #include "car.hpp" のような素の名前のまま相互参照できる。
+target_include_directories(racegame PRIVATE
+    src/domain src/app src/ports src/platform)
+
 
 set(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
