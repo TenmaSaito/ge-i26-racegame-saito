@@ -8,8 +8,8 @@
 //       を知ってよいが、内側はこの層を直接知らない (ポート経由)。
 // Android への移植: SDL が Android でも同じ API を提供するため、
 //       このファイルは原則そのまま使える（アセット読み込みは SDL_RWops）。
-// 依存: SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer
-//       (いずれも SDL 公式の姉妹ライブラリで Android 対応)。
+// 依存: SDL2 本体＋テクスチャ用 SDL_image (どちらも Android / Windows 対応)。
+//       音声は SDL2 本体の音声デバイスを audio.cpp が直接使う。
 // ============================================================================
 
 #include "platform.hpp"
@@ -20,10 +20,11 @@
 #include "tuning.hpp"  // parseTuning / kTuningStorageKey (外部変更の反映用)
 #include "ranking.hpp"  // kRankingStorageKey
 #include "audio.hpp"     // createAudio / destroyAudio
+#include "racerecord.hpp"     // kRecordStorageKey / kPlayerNameStorageKey
+#include "recordservice.hpp"  // createRecordService / destroyRecordService
 
 #include <SDL.h>
 #include <SDL_image.h>
-#include <SDL_mixer.h>
 
 #include <cstdio>
 #include <fstream>
@@ -73,6 +74,7 @@ SDL_Window* gWindow = nullptr;
 SDL_GLContext gGl = nullptr;
 IRenderer* gRenderer = nullptr;  // Game へ差し込んだ描画実装 (所有はこの層)
 IAudio* gAudio = nullptr;        // Game へ差し込んだ音声実装 (所有はこの層)
+IRecordService* gRecords = nullptr;  // 走行記録のオンライン共有 (所有はこの層)
 
 }  // namespace
 
@@ -210,13 +212,10 @@ bool createWindow(Game& app) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
-    // テクスチャ (PNG) と音声 (OGG) の土台だけ先に用意しておく。
-    // 読み込み自体は今後の実装で platform の読み込み口から行う。
+    // テクスチャ (PNG) の土台だけ先に用意しておく。
+    // 音声デバイスは createAudio (audio.cpp) が自分で開く。
     if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0) {
         SDL_Log("IMG_Init failed: %s", IMG_GetError());
-    }
-    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) != 0) {
-        SDL_Log("Mix_OpenAudio failed: %s", Mix_GetError());
     }
 #ifdef __EMSCRIPTEN__
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
@@ -267,10 +266,36 @@ bool createWindow(Game& app) {
     app.setSaveTuningSink([](const std::string& text) {
         saveSetting(kTuningStorageKey, text);
     });
+    // 走行記録 (学習・対戦相手の一覧) の保存口と復元、オンライン共有の実装。
+    app.setRecordsSink([](const std::string& text) { saveSetting(kRecordStorageKey, text); });
+    {
+        std::string savedRecords;
+        if (loadSetting(kRecordStorageKey, savedRecords)) {
+            app.setRecordsText(savedRecords);
+        }
+    }
+    // 動作確認用の自動運転 (ブラウザは ?autopilot=1)。
+    if (urlQueryParam("autopilot") == "1") {
+        app.setAutopilot(true);
+    }
+    gRecords = createRecordService();
+    app.installRecordService(gRecords);
+    // プレイヤー名: ブラウザはページの入力欄 (localStorage)、ネイティブは設定
+    // ファイル (--name で保存できる)。レースのたびに読み直すので変更がすぐ効く。
+    app.setPlayerNameSource([]() {
+        std::string name;
+        loadSetting(kPlayerNameStorageKey, name);
+        return name;
+    });
     return true;
 }
 
 void destroyWindow(Game& app) {
+    if (gRecords) {
+        app.installRecordService(nullptr);
+        destroyRecordService(gRecords);
+        gRecords = nullptr;
+    }
     if (gAudio) {
         destroyAudio(gAudio);
         gAudio = nullptr;
@@ -282,8 +307,6 @@ void destroyWindow(Game& app) {
         gRenderer = nullptr;
         app.installRenderer(nullptr);
     }
-    Mix_CloseAudio();
-    Mix_Quit();
     IMG_Quit();
     if (gGl) {
         SDL_GL_DeleteContext(gGl);

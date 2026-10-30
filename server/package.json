@@ -1,0 +1,11 @@
+{
+  "name": "racegame-records",
+  "private": true,
+  "type": "module",
+  "description": "走行記録の共有サーバー (Cloudflare Workers + KV)",
+  "scripts": {
+    "test": "node test.mjs",
+    "dev": "node devserver.mjs",
+    "deploy": "npx wrangler deploy"
+  }
+}

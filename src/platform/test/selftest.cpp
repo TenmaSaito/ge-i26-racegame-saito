@@ -1,21 +1,31 @@
 // ============================================================================
 // selftest.cpp ― 自己検証（--self-test）
 // 役割: ドリフトが成立することと、AI がコースを完走できることを自動確認する。
-//       製品の実行経路には含まれない。物理 (car) とコース (track) だけに依存。
+//       音の合成 (sound) も、音声デバイスを使わずに数値で確認する。
+//       製品の実行経路には含まれない。
 // ============================================================================
 
 #include "selftest.hpp"
 
+#include "aidriver.hpp"   // AI ドライバーの検証用
 #include "car.hpp"
+#include "enginesim.hpp"  // EngineSim (ギアと回転数) の検証用
 #include "effects.hpp"  // タイヤ痕の生成テスト用
 #include "ghost.hpp"    // Ghost の検証用
 #include "race.hpp"     // Race (ロケットスタート検証用)
+#include "racerecord.hpp"  // 走行記録と学習の検証用
 #include "object.hpp"   // ObjectManager の検証用
+#include "pcm.hpp"         // WAV 読み込み・ループ加工の検証用
 #include "scenery.hpp"  // SceneryBuilder (地形) の検証用
+#include "soundmixer.hpp"  // ミキサーの検証用
 #include "track.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 // ドリフトの自己確認: まっすぐ加速 -> ドリフトボタン+全開ステアで滑らせる ->
 // 緩めると収束する、の 3 段階を見る。滑らなければ (スリップ角が付かなければ) 失敗。
@@ -136,6 +146,200 @@ int driftTest(const Track& track) {
         std::printf("drift-test: mouse counter did not cancel drift\n");
         return 12;
     }
+    return 0;
+}
+
+
+// ============================================================================
+// 音の自己確認 (音声デバイスは使わず、合成結果の数値だけを見る)
+// ============================================================================
+namespace {
+
+// テスト用の WAV (16bit ステレオ、正弦波) をメモリ上に作る。
+std::string makeTestWav(int rate, int frames, float hz) {
+    std::string wav;
+    auto put16 = [&](uint32_t v) { wav.push_back(char(v & 0xFF)); wav.push_back(char((v >> 8) & 0xFF)); };
+    auto put32 = [&](uint32_t v) { put16(v & 0xFFFF); put16(v >> 16); };
+    const uint32_t dataBytes = uint32_t(frames) * 4;
+    wav += "RIFF"; put32(36 + dataBytes); wav += "WAVE";
+    wav += "fmt "; put32(16); put16(1); put16(2); put32(uint32_t(rate)); put32(uint32_t(rate) * 4); put16(4); put16(16);
+    wav += "data"; put32(dataBytes);
+    for (int i = 0; i < frames; ++i) {
+        const int16_t v = int16_t(std::sin(6.2831853f * hz * float(i) / float(rate)) * 16000.0f);
+        put16(uint16_t(v));
+        put16(uint16_t(v));
+    }
+    return wav;
+}
+
+// 波形の RMS (音の大きさの目安)。
+float rms(const std::vector<float>& buf) {
+    double sum = 0;
+    for (float v : buf) sum += double(v) * v;
+    return buf.empty() ? 0.0f : float(std::sqrt(sum / double(buf.size())));
+}
+
+}  // namespace
+
+int soundTest() {
+    // --- WAV の読み込み ---------------------------------------------------
+    Pcm pcm;
+    if (!decodeWav(makeTestWav(44100, 44100, 220.0f), pcm) || pcm.rate != 44100 || pcm.frames() != 44100) {
+        std::printf("sound-test: decodeWav failed\n");
+        return 30;
+    }
+    if (decodeWav(std::string("not a wav file"), pcm) || pcm.frames() != 44100) {
+        return 31;  // 壊れた入力は失敗し、読み込み済みの中身も変わらない
+    }
+
+    // --- シームレスループ: 最後のサンプル → 最初のサンプルが滑らかにつながる ---
+    Pcm loop = makeSeamlessLoop(pcm, 0.0f, 0.2f);
+    const int n = loop.frames();
+    float maxStep = 0;  // 隣り合うサンプルの差の最大 (ループ内部)
+    for (int i = 1; i < n; ++i) {
+        maxStep = std::max(maxStep, std::fabs(loop.samples[size_t(i) * 2] - loop.samples[size_t(i - 1) * 2]));
+    }
+    const float seamStep = std::fabs(loop.samples[0] - loop.samples[size_t(n - 1) * 2]);
+    std::printf("self-test loop seam %.4f (inner max %.4f)\n", seamStep, maxStep);
+    if (n <= 0 || seamStep > maxStep * 1.5f + 1e-4f) {
+        return 32;  // 継ぎ目で波形が跳んでいる (プチ音になる)
+    }
+
+    // --- ミキサー: 鳴らす/止めるが音量に反映される -------------------------
+    SoundMixer mixer;
+    mixer.setOutputRate(48000);
+    mixer.setEngineLoop(loop);
+    mixer.setTireLoop(loop);
+    std::vector<float> buf(2048 * 2);
+    mixer.render(buf.data(), 2048);
+    if (rms(buf) > 1e-4f) return 33;  // 何も指示していなければ無音
+
+    EngineSound engine;
+    engine.running = true;
+    engine.rpm = 3000.0f;
+    engine.rpmNorm = 0.3f;
+    engine.throttle = 1.0f;
+    engine.load = 1.0f;
+    mixer.setEngine(engine);
+    for (int i = 0; i < 20; ++i) mixer.render(buf.data(), 2048);  // フェードインを待つ
+    const float engineRms = rms(buf);
+    std::printf("self-test engine rms %.3f\n", engineRms);
+    if (engineRms < 0.02f) return 34;
+    for (float v : buf) {
+        if (!(std::fabs(v) <= 1.0f)) return 35;  // NaN や過大値が出ていない
+    }
+
+    mixer.setEngine(EngineSound{});
+    for (int i = 0; i < 60; ++i) mixer.render(buf.data(), 2048);  // フェードアウトを待つ
+    if (rms(buf) > 1e-3f) return 36;
+
+    TireSound tire;
+    tire.depth = 0.8f;
+    tire.duration = 1.0f;
+    tire.speed = 25.0f;
+    mixer.setTires(tire);
+    for (int i = 0; i < 10; ++i) mixer.render(buf.data(), 2048);
+    std::printf("self-test tire rms %.3f\n", rms(buf));
+    if (rms(buf) < 0.02f) return 37;
+
+    // --- エンジン回転数のモデル: 加速でシフトアップ、リミッターで頭打ち ---
+    EngineSim sim;
+    sim.reset(82.0f);
+    for (float v = 0; v < 80.0f; v += 0.2f) {
+        sim.update(1.0f / 60.0f, v, 1.0f, 0.0f, false);
+    }
+    std::printf("self-test engine gear %d rpm %.0f\n", sim.gear(), sim.rpm());
+    if (sim.gear() < 5 || sim.rpm() > EngineSim::kRedRpm) return 38;
+    sim.reset(82.0f);
+    for (int i = 0; i < 120; ++i) sim.update(1.0f / 60.0f, 0.0f, 1.0f, 0.0f, true);  // 空ぶかし全開
+    if (sim.gear() != 0 || sim.rpm() < EngineSim::kRedRpm * 0.85f) return 39;
+    std::printf("self-test sound ok\n");
+    return 0;
+}
+
+// ============================================================================
+// AI と走行記録の自己確認
+// ============================================================================
+
+// AI が 1 人でコースを 1 周できること (強さごと)。ラップタイムと壁への接触を表示する。
+// 強い AI ほど速いこと (EASY > NORMAL > HARD のラップタイム) も確かめる。
+int aiTest(const Track& track) {
+    const float dt = 1.0f / 60.0f;
+    float laps[kAiLevelCount] = {0, 0, 0};
+    std::printf("ai-test spawn at s=%.1f of %.1f m\n", spawnDistance(track), track.length);
+    for (int level = 0; level < kAiLevelCount; ++level) {
+        Car car;
+        placeCarOnTrack(car, track, spawnDistance(track), 0.0f);
+        AiDriver driver;
+        driver.prepare(track, aiSkillFor(AiLevel(level), 0.0f), {}, 12345u);
+        Race race;
+        race.reset();
+        int wallSteps = 0;
+        float maxLateral = 0.0f;
+        for (int step = 0; step < 60 * 600 && race.completed() < 1; ++step) {
+            DriveInput in = driver.drive(car, track, dt, {});
+            car.update(dt, in, track);
+            race.tick(car.ground.s, track.length, dt);
+            if (car.wallContact) ++wallSteps;
+            maxLateral = std::max(maxLateral, std::fabs(car.ground.lateral));
+        }
+        std::printf("ai-test %-6s lap %.2f s  wall %.1f s  maxLat %.1f m\n", aiLevelName(AiLevel(level)),
+                    race.lastLap(), float(wallSteps) * dt, maxLateral);
+        if (race.completed() < 1) {
+            std::printf("ai-test: %s did not finish a lap\n", aiLevelName(AiLevel(level)));
+            return 40;
+        }
+        laps[level] = race.lastLap();
+    }
+    if (!(laps[0] > laps[1] && laps[1] > laps[2])) {
+        std::printf("ai-test: levels are not ordered by pace\n");
+        return 41;
+    }
+    return 0;
+}
+
+// 走行記録の保存形式と学習の確認。
+int recordTest() {
+    RaceRecord r;
+    r.name = "tester 01";
+    r.course = "suzuka";
+    r.car = 1;
+    r.level = 2;
+    r.total = 300.5f;
+    r.bestLap = 98.25f;
+    r.profile.assign(kProfileBins, 40.0f);
+    RaceRecord back;
+    if (!RaceRecord::parse(r.serialize(), back) || back.name != "TESTER_01" || back.course != "suzuka" ||
+        std::fabs(back.total - 300.5f) > 0.01f || back.profile.size() != size_t(kProfileBins)) {
+        std::printf("record-test: round trip failed\n");
+        return 42;
+    }
+    if (RaceRecord::parse("R1|X|suzuka|0|0|10|20|1,2", back)) {
+        return 43;  // ベストが合計より遅い・区間数が足りない記録は拒否
+    }
+
+    RecordBook book;
+    book.addOwn(r);
+    RaceRecord other = r;
+    other.name = "RIVAL";
+    other.total = 290.0f;
+    other.profile.assign(kProfileBins, 50.0f);
+    book.addShared(other);
+    if (book.addShared(other) != 0) return 44;  // 同じ記録は 2 度入らない
+    const std::vector<float> learned = book.learnedProfile("suzuka");
+    // 速い記録 (50 m/s) の重みが大きいので、平均は 45 より 50 寄りになる。
+    if (learned.size() != size_t(kProfileBins) || !(learned[0] > 45.0f && learned[0] < 50.0f)) return 45;
+    if (book.pickRivalModels("suzuka", "TESTER_01", 3).size() != 1) return 46;
+
+    book.noteRace(1, {"RIVAL", "AKAGI"}, 1, 3);
+    book.noteRace(1, {"RIVAL"}, 2, 2);
+    if (book.opponentsFaced() != 2 || book.battles() != 3 || book.wins() != 1) return 47;
+    if (!(book.paceAdjust(1) == 0.0f)) return 48;  // 1 回勝って 1 回最下位 → 補正は元に戻る
+
+    RecordBook restored;
+    restored.deserialize(book.serialize());
+    if (restored.opponentsFaced() != 2 || restored.battles() != 3 || restored.sharedCount("suzuka") != 1) return 49;
+    std::printf("self-test records ok (learned %.1f m/s)\n", learned[0]);
     return 0;
 }
 
@@ -288,8 +492,17 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
         std::printf("self-test sparks %d\n", fx.sparkCount());
         if (fx.sparkCount() <= 0) return 14;
     }
-    // 音声ポート: 実装が無くても setSlip は安全 (Game 側のヌルガード確認は
-    // ここでは行わず、ブラウザ実機で鳴ることを正とする)。
+    // 音: WAV 読み込み・ループの継ぎ目・ミキサーの鳴らし分け・ギアシフト。
+    if (int rc = soundTest()) {
+        return rc;
+    }
+    // 対戦相手の AI と、走行記録・学習。
+    if (int rc = aiTest(track)) {
+        return rc;
+    }
+    if (int rc = recordTest()) {
+        return rc;
+    }
     // タイヤ痕: ドリフト状態の車を直進させると、痕の区間が刻まれること。
     {
         Effects fx;

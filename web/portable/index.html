@@ -57,13 +57,19 @@
   .credit { text-align:center; font-size:12px; opacity:.75; margin: 4px auto 26px; }
 
   a { color: #9fdcff; }
+  .name-field { display: flex; align-items: center; gap: 8px; font-size: 13px; opacity: .9; }
+  .name-field input {
+    width: 9.5em; padding: 7px 12px; border-radius: 999px; font-size: 14px; letter-spacing: .08em;
+    color: #eaf6ff; background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.35);
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>ドリフトレース（仮）</h1>
   <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
-  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-29 · SOUND FIX 2</p>
+  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-30 · AI RIVALS</p>
 </header>
 
 <div id="wrap">
@@ -72,6 +78,7 @@
 <div id="status">読み込み中…</div>
 <div id="audioState" style="text-align:center;font-size:12px;opacity:.8;min-height:1.3em;">AUDIO: -</div>
 <div class="bar">
+  <label class="name-field">プレイヤー名 <input id="playerName" type="text" maxlength="12" placeholder="PLAYER" autocomplete="off" spellcheck="false"></label>
   <button id="fs" type="button">全画面で遊ぶ</button>
 </div>
 
@@ -128,45 +135,44 @@
     canvasEl.dispatchEvent(new KeyboardEvent('keyup', opt));
   });
 </script>
+<script>
+  // 走行記録の共有サーバー (server/README.md の手順で Cloudflare Workers に置いた URL)。
+  // 空のままなら記録は手元 (このブラウザ) だけに残り、AI の学習もそれで行う。
+  window.RACEGAME_API = window.RACEGAME_API || '';
+
+  // プレイヤー名の入力欄。英大文字・数字・_- の 12 文字まで (ゲーム内フォントで
+  // 表示できる文字だけ)。値は localStorage に保存し、次のレースから使われる。
+  (function () {
+    var KEY = 'racegamePlayerName';
+    var input = document.getElementById('playerName');
+    if (!input) return;
+    try { input.value = localStorage.getItem(KEY) || ''; } catch (e) {}
+    function clean(s) { return String(s).toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 12); }
+    input.addEventListener('input', function () {
+      var v = clean(input.value);
+      if (v !== input.value) input.value = v;
+      try { localStorage.setItem(KEY, v); } catch (e) {}
+    });
+    // 入力中のキーがゲームの操作として扱われないようにする。
+    ['keydown', 'keyup', 'keypress'].forEach(function (type) {
+      input.addEventListener(type, function (e) { e.stopPropagation(); });
+    });
+  })();
+</script>
 <script async src="racegame.js"></script>
 <script>
-// 音声の自動再生制限対策と状態表示。ブラウザはユーザー操作があるまで
-// AudioContext を止めたままにする。SDL はキー/マウスで再開するが、
-// ゲームパッドだけだと操作として数えられず無音になることがあるため、
-// パッドのボタンも含めてあらゆる入力で再開を試み、状態を表示する。
+// 音声の状態表示。自動再生制限の解除 (クリック・キー・タッチ・パッドで
+// AudioContext を再開) とタブ切替時の一時停止はゲーム本体 (audio.cpp) が
+// 行うので、ページ側は状態を表示するだけでよい。
 (function () {
-  function audioContext() {
-    var paths = [];
-    try { if (window.Module && Module.SDL2) { paths.push(Module.SDL2.audioContext); } } catch (e) {}
-    try { if (window.SDL2) { paths.push(SDL2.audioContext); } } catch (e) {}
-    try { if (window.Module && Module.SDL) { paths.push(Module.SDL.audioContext, Module.SDL.audio && Module.SDL.audio.audioContext); } } catch (e) {}
-    try { if (window.SDL) { paths.push(SDL.audioContext, SDL.audio && SDL.audio.audioContext); } } catch (e) {}
-    for (var i = 0; i < paths.length; i++) { if (paths[i]) return paths[i]; }
-    return null;
-  }
-  function resume() {
-    var ctx = audioContext();
-    if (ctx && ctx.state === 'suspended') { ctx.resume(); }
-  }
-  ['pointerdown', 'keydown', 'touchstart', 'mousedown'].forEach(function (ev) {
-    window.addEventListener(ev, resume, true);
-  });
   var el = document.getElementById('audioState');
+  if (!el) return;
+  var labels = { running: '再生中', suspended: 'クリックまたはキー操作で音が出ます', closed: '停止' };
   setInterval(function () {
-    try {
-      var pads = navigator.getGamepads ? navigator.getGamepads() : [];
-      for (var i = 0; i < pads.length; i++) {
-        var p = pads[i];
-        if (!p) continue;
-        for (var j = 0; j < p.buttons.length; j++) {
-          if (p.buttons[j].pressed) { resume(); break; }
-        }
-      }
-    } catch (e) {}
-    if (el) {
-      var ctx = audioContext();
-      el.textContent = 'AUDIO: ' + (ctx ? ctx.state : 'no-context');
-    }
+    var sdl = window.Module && Module.SDL2;
+    var ctx = sdl && sdl.audioContext;
+    var state = ctx ? ctx.state : 'loading';
+    el.textContent = 'AUDIO: ' + (labels[state] || '準備中');
   }, 300);
 })();
 </script>

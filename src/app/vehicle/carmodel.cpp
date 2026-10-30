@@ -38,10 +38,21 @@ Vec3 carSpecColor(int spec) {
     return palette[spec < 0 ? 0 : (spec > 2 ? 2 : spec)];
 }
 
-void buildCarDetails(CpuMesh& mesh, int spec) {
+Vec3 rivalColor(int index) {
+    // 対戦相手の色。プレイヤーの車種色 (赤・青・橙) と見分けがつく色にする。
+    static const Vec3 palette[4] = {
+        {0.10f, 0.55f, 0.22f},  // 緑
+        {0.48f, 0.16f, 0.62f},  // 紫
+        {0.90f, 0.78f, 0.12f},  // 黄
+        {0.86f, 0.87f, 0.90f},  // 白
+    };
+    return palette[((index % 4) + 4) % 4];
+}
+
+void buildCarDetails(CpuMesh& mesh, int spec, const Vec3* color) {
     const Vec3 glass{0.09f, 0.13f, 0.19f};   // キャノピーのガラス色
     const Vec3 carbon{0.12f, 0.12f, 0.13f};  // カーボン部品
-    const Vec3 red = carSpecColor(spec);     // ボディ色 (本体と合わせる)
+    const Vec3 red = color ? *color : carSpecColor(spec);  // ボディ色 (本体と合わせる)
     const Vec3 metal{0.55f, 0.56f, 0.58f};   // 金属色 (排気管)
     const Vec3 lamp{0.95f, 0.95f, 0.85f};    // ヘッドライト色
     // キャノピー (ガラス) と屋根のパネル。
@@ -95,8 +106,8 @@ void buildCarDetails(CpuMesh& mesh, int spec) {
 
 // ホイールの作り込み。中心にアクセント色のハブを足す (回転対称なので
 // ホイールが回っても違和感がない)。
-void buildWheelDetails(CpuMesh& mesh, int spec) {
-    const Vec3 accent = carSpecColor(spec);  // ハブ色もボディに合わせる
+void buildWheelDetails(CpuMesh& mesh, int spec, const Vec3* color) {
+    const Vec3 accent = color ? *color : carSpecColor(spec);  // ハブ色もボディに合わせる
     const int seg = 10;
     const float radius = 0.10f;
     const float halfW = 0.17f;

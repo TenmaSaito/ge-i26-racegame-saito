@@ -34,6 +34,13 @@ struct DriftTuning {
 
 extern DriftTuning driftTuning;
 
+// 前進の最高速 (m/s、約 295 km/h)。車種の topSpeedMul を掛けても、この値で頭打ち。
+// エンジン音のギア比 (EngineSim) もこの値を基準にする。
+constexpr float kCarMaxSpeed = 82.0f;
+// 前輪の最大切れ角 (ラジアン)。速いほど小さくなる (高速での過敏さを抑える)。
+// AI のステア量の換算にも使う。
+float maxSteerAt(float speed);
+
 struct Car {
     float x = 0;  // ワールド座標 (m)
     float y = 0;  // 高さ (m)。接地中は路面高、空中では放物線の現在高
@@ -103,7 +110,8 @@ inline constexpr CarSpec kCarSpecs[3] = {
 };
 constexpr int kCarSpecCount = 3;
 
-void buildCarBody(CpuMesh& mesh, int spec);
+// color を渡すとボディ色を上書きする (対戦相手の車を塗り分けるため)。
+void buildCarBody(CpuMesh& mesh, int spec, const Vec3* color = nullptr);
 void buildCarWheel(CpuMesh& mesh);
 void buildCarShadow(CpuMesh& mesh);
 Mat4 carModelMatrix(const Car& car, float pitch, float roll);

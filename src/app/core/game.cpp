@@ -21,6 +21,7 @@
 #include "scenery.hpp"   // SceneryBuilder
 #include "tuning.hpp"    // tuneItems / serializeTuning
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -35,9 +36,13 @@ void Game::resetRace() {
     car_.reset(track_);
     race_.reset();
     race_.startCountdown();  // 3・2・1 の後にスタート
+    // エンジンはアイドルから。ギア比の基準は車種ごとの実際の最高速。
+    engine_.reset(std::min(kCarMaxSpeed, kCarMaxSpeed * car_.topSpeedMul));
     camera_.ready = false;  // カメラは次のフレームで即座に置き直す
     effects_.clear();       // 煙・光跡・タイヤ痕も残さない
     ghost_.discard();       // 記録中ラップは捨てる (保存済みゴーストは残す)
+    profileRecorder_.reset(track_.length);  // 区間速度の記録もやり直す
+    setupRivals();          // 対戦相手をグリッドへ並べ直す
 }
 
 // 現在のチューニング値を保存する。実務は差し込み先 (platform) の担当で、
@@ -78,6 +83,18 @@ void Game::rebuildCarMeshes() {
     body_ = renderer_->upload(body);
     wheel_ = renderer_->upload(wheel);
     shadow_ = renderer_->upload(shadow);
+    // 対戦相手の車: 形はプレイヤーと同じ車種、色だけ塗り分ける。
+    for (int i = 0; i < kMaxRivals; ++i) {
+        const Vec3 color = rivalColor(i);
+        CpuMesh rivalBody;
+        CpuMesh rivalWheel;
+        buildCarBody(rivalBody, carSpec_, &color);
+        buildCarDetails(rivalBody, carSpec_, &color);
+        buildCarWheel(rivalWheel);
+        buildWheelDetails(rivalWheel, carSpec_, &color);
+        rivalBody_[i] = renderer_->upload(rivalBody);
+        rivalWheel_[i] = renderer_->upload(rivalWheel);
+    }
 }
 
 // 初期化: 車まわりのメッシュ (コースに依らない) を作ってアップロードし、
@@ -146,11 +163,14 @@ bool Game::loadCourse(const std::string& stem) {
     // プレイヤー車もオブジェクトとして登録する (Find("Player") で引ける)。
     objects_.add<CarObject>("Player", car_);
     resetRace();
+    requestSharedRecords();  // このコースの共有記録を取りに行く (届けば学習に使う)
     return true;
 }
 
-// ゴール結果をランキングへ登録し、保存口へ流す。
+// ゴール結果を記録する: ランキング・順位・走行記録 (学習用) と、
+// 対戦相手の一覧 (これまで戦った人数)。記録はオンラインへも共有する。
 int Game::recordResult() {
+    lastOutcome_ = RaceOutcome{};
     if (race_.completed() < kRaceLaps || race_.total() <= 0) {
         return -1;
     }
@@ -158,6 +178,31 @@ int Game::recordResult() {
     if (rankingSink_) {
         rankingSink_(ranking_.serialize());
     }
+
+    // --- 順位と、対戦の学習 (勝敗で AI のペースを調整) ----------------------
+    lastOutcome_.position = playerPosition();
+    lastOutcome_.entrants = 1 + static_cast<int>(rivals_.size());
+    std::vector<std::string> opponents;
+    for (const Rival& rival : rivals_) opponents.push_back(rival.name);
+    recordBook_.noteRace(int(aiLevel_), opponents, lastOutcome_.position, lastOutcome_.entrants);
+
+    // --- 走行記録 (区間速度つき)。手元に残し、オンラインへ共有する ---------
+    RaceRecord record;
+    record.name = playerName();
+    record.course = courseStem_;
+    record.car = carSpec_;
+    record.level = rivals_.empty() ? -1 : int(aiLevel_);
+    record.total = race_.total();
+    record.bestLap = race_.best();
+    record.profile = profileRecorder_.bestProfile();
+    if (record.valid()) {
+        recordBook_.addOwn(record);
+        if (recordService_ && recordService_->available()) {
+            recordService_->submit(record.serialize());
+            lastOutcome_.shared = true;
+        }
+    }
+    saveRecords();
     return rank;
 }
 
@@ -187,6 +232,7 @@ void Game::frame(double dtSeconds) {
         hasPendingScene_ = false;
         switchScene(pendingScene_);
     }
+    pollSharedRecords();  // オンラインの記録が届いていれば取り込む
     if (scene_) {
         scene_->frame(dtSeconds);
     }
@@ -351,6 +397,7 @@ void Game::drawMirror(Vec3 carPos, float carYaw) {
     beginWorldDraw();           // 子画面の範囲だけ消して空と投影を設定
     drawWorld(carPos, carYaw);  // 景観・痕・影 (自車は死角で映らない)
     drawGhost();                // 後ろにいるゴーストも映す
+    drawRivals(false);          // 後ろの対戦相手も映す (傾きは本描画で更新済み)
     renderer_->clearViewport();
     cullRadius_ = savedCull;
     drawBackdrop_ = savedBackdrop;

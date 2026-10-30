@@ -1,7 +1,8 @@
 // ============================================================================
 // selectscene.cpp ― セレクトシーン (SelectScene) の実装
-// 操作: ←→ (またはパッド左右) でコース、↑↓ で車種、1/2/3 でも車種、
-//       決定で読み直してレースへ、Esc でタイトルへ戻る。
+// 操作: ↑↓ (またはパッド上下) で項目、←→ で値を変える。1/2/3 でも車種。
+//       決定で設定を反映してレースへ、Esc でタイトルへ戻る。
+//   項目: STAGE (コース) / CAR (車種) / RIVALS (SOLO・1〜3 台) / AI LEVEL
 // ============================================================================
 
 #include "selectscene.hpp"
@@ -14,17 +15,30 @@
 #include <cmath>
 
 void SelectScene::enter() {
-    game_.setSlip(0);    // レース外ではドリフト音を止める
-    game_.setEngine(0, 0);  // エンジン音も止める
+    game_.silenceAudio();  // レース外ではエンジン音・ドリフト音を止める
     t_ = 0;
-    // 現在のコースと車種から選択位置を初期化する (2 回目以降も自然に)。
-    course_ = 0;
+    // 現在の設定から選択位置を初期化する (2 回目以降も前回の設定のまま)。
+    menu_ = SelectMenu{};
     for (int i = 0; i < kCourseCount; ++i) {
         if (game_.courseStem() == kCourses[i].stem) {
-            course_ = i;
+            menu_.course = i;
         }
     }
-    spec_ = game_.carSpec();
+    menu_.spec = game_.carSpec();
+    menu_.rivals = game_.rivalCount();
+    menu_.level = int(game_.aiLevel());
+    game_.requestSharedRecords();  // 対戦相手のモデルにする共有記録を先に取りに行く
+}
+
+void SelectScene::adjust(int row, int dir) {
+    auto wrap = [](int v, int n) { return (v % n + n) % n; };
+    switch (row) {
+    case 0: menu_.course = wrap(menu_.course + dir, kCourseCount); break;
+    case 1: menu_.spec = wrap(menu_.spec + dir, kCarSpecCount); break;
+    case 2: menu_.rivals = wrap(menu_.rivals + dir, Game::kMaxRivals + 1); break;
+    case 3: menu_.level = wrap(menu_.level + dir, kAiLevelCount); break;
+    default: break;
+    }
 }
 
 void SelectScene::frame(double dt) {
@@ -33,27 +47,31 @@ void SelectScene::frame(double dt) {
         game_.requestScene(SceneId::Title);  // Esc はタイトルへ戻る
         return;
     }
-    // 左右 = コース、上下 = 車種 (pollUi の調整系チャンネルを流用)。
-    if (ui.tuneAdjust > 0) {
-        course_ = (course_ + 1) % kCourseCount;
-    } else if (ui.tuneAdjust < 0) {
-        course_ = (course_ + kCourseCount - 1) % kCourseCount;
+    // 上下 = 項目、左右 = 値 (pollUi の調整系チャンネルを流用)。
+    // ソロのときは AI の強さの行を飛ばす (選んでも意味がないため)。
+    const int rows = menu_.rivals > 0 ? SelectMenu::kRows : SelectMenu::kRows - 1;
+    if (ui.tuneSelect != 0) {
+        menu_.row = (menu_.row + (ui.tuneSelect > 0 ? 1 : -1) + rows) % rows;
     }
-    if (ui.tuneSelect > 0) {
-        spec_ = (spec_ + 1) % 3;
-    } else if (ui.tuneSelect < 0) {
-        spec_ = (spec_ + 2) % 3;
+    if (menu_.row >= rows) {
+        menu_.row = rows - 1;
+    }
+    if (ui.tuneAdjust != 0) {
+        adjust(menu_.row, ui.tuneAdjust > 0 ? 1 : -1);
     }
     if (ui.carSpec >= 0) {
-        spec_ = ui.carSpec;
+        menu_.spec = ui.carSpec;
     }
     if (ui.confirm) {
-        // コースが変わっていれば読み直し、車種を適用してからレースへ。
-        if (game_.courseStem() != kCourses[course_].stem) {
-            game_.loadCourse(kCourses[course_].stem);
+        // 車種と対戦設定を適用し、コースが変わっていれば読み直してからレースへ。
+        // (レース開始時の resetRace が、この設定で対戦相手を並べる)
+        game_.setRivalCount(menu_.rivals);
+        game_.setAiLevel(AiLevel(menu_.level));
+        if (game_.carSpec() != menu_.spec) {
+            game_.applyCarSpec(menu_.spec);
         }
-        if (game_.carSpec() != spec_) {
-            game_.applyCarSpec(spec_);
+        if (game_.courseStem() != kCourses[menu_.course].stem) {
+            game_.loadCourse(kCourses[menu_.course].stem);
         }
         game_.requestScene(SceneId::Race);
         return;
@@ -71,5 +89,5 @@ void SelectScene::frame(double dt) {
 
     game_.beginWorldDraw();
     game_.drawWorld({car.x, car.y, car.z}, car.yaw);
-    game_.hud().drawSelect(game_, course_, spec_, float(t_));
+    game_.hud().drawSelect(game_, menu_, float(t_));
 }
