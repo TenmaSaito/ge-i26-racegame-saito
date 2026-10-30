@@ -417,17 +417,18 @@ void RaceScene::updateSound(float elapsed, const DriveInput& raw, const DriveInp
     app.setEngineSound(app.engine().sound(true));
 
     // --- タイヤ音: 滑りの「深さ」と「続いている時間」を求める ---------------
-    // 深さ: ドリフト中はドリフト量とスリップ角の両方から (角度が深いほど強く)。
-    //       ドリフト判定外でも、横に大きく流れたりスピンしたりしていれば鳴らす
-    //       (低速では音声側で自然に小さくなる)。
-    const float angle = clampf(std::fabs(car.slipAngle) / 0.9f, 0.0f, 1.0f);
-    float depth = 0.0f;
+    // 深さ: タイヤが鳴るのは「実際に横へ滑っている」とき。横滑りの速さ (m/s) を
+    //       基本にし、ドリフト中はドリフト量で上乗せする。
+    //       スリップ角だけで決めないこと: ドリフトが終わっても車体の向きと進行方向の
+    //       ずれはしばらく残り、低速では角度そのものが暴れるため、滑っていないのに
+    //       音が鳴り続けてしまう。横滑りが止まれば、ドリフトの判定が残っていても消す。
+    const float lateral = std::fabs(car.lateralSpeed);
+    const float slide = clampf((lateral - 2.5f) / 9.0f, 0.0f, 1.0f);
+    float depth = slide;
     if (car.drifting) {
-        depth = clampf(0.55f * car.driftAmount + 0.45f * angle, 0.0f, 1.0f);
-    } else {
-        const float lateral = (std::fabs(car.lateralSpeed) - 4.0f) / 10.0f;
-        depth = clampf(std::max(lateral, angle * 0.8f - 0.1f), 0.0f, 0.8f);
+        depth = std::max(depth, 0.6f * car.driftAmount * clampf(lateral / 4.0f, 0.0f, 1.0f));
     }
+    depth = clampf(depth, 0.0f, 1.0f);
     if (!car.onAsphalt) depth *= 0.25f;  // 芝ではタイヤは鳴かない (擦れる音だけ)
     if (counting) depth = 0.0f;
 
