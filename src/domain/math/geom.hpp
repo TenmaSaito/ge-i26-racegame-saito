@@ -4,20 +4,26 @@
 
 // 右手系。x が東、y が上、z が北。yaw 0 は +z を向き、正の yaw は右（時計回り）。
 
+// 円周率。角度計算で何度も使うので、コンパイル時定数として 1 か所に置く。
+inline constexpr float kPi = 3.14159265f;
+
+// 算術系は constexpr 化してある: 定数同士の計算はコンパイル時に終わり、
+// 実行時は結果だけが残る。sqrt / 三角関数を含むものは C++17 では
+// constexpr にできないため通常関数のまま (length / normalize / 回転等)。
 struct Vec3 {
     float x = 0;
     float y = 0;
     float z = 0;
 };
 
-inline Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
-inline Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-inline Vec3 operator*(Vec3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
-inline Vec3 operator*(float s, Vec3 a) { return a * s; }
+constexpr Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+constexpr Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+constexpr Vec3 operator*(Vec3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+constexpr Vec3 operator*(float s, Vec3 a) { return a * s; }
 
-inline float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+constexpr float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
-inline Vec3 cross(Vec3 a, Vec3 b) {
+constexpr Vec3 cross(Vec3 a, Vec3 b) {
     return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
@@ -31,16 +37,15 @@ inline Vec3 normalize(Vec3 a) {
     return a * (1.0f / len);
 }
 
-inline float clampf(float v, float lo, float hi) {
+constexpr float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
 }
 
-inline float wrapPi(float a) {
-    const float pi = 3.14159265f;
-    while (a > pi) a -= pi * 2.0f;
-    while (a < -pi) a += pi * 2.0f;
+constexpr float wrapPi(float a) {
+    while (a > kPi) a -= kPi * 2.0f;
+    while (a < -kPi) a += kPi * 2.0f;
     return a;
 }
 
@@ -54,7 +59,7 @@ struct Mat4 {
     };
 };
 
-inline Mat4 mul(const Mat4& a, const Mat4& b) {
+constexpr Mat4 mul(const Mat4& a, const Mat4& b) {
     Mat4 r;
     for (int c = 0; c < 4; ++c) {
         for (int row = 0; row < 4; ++row) {
@@ -68,7 +73,7 @@ inline Mat4 mul(const Mat4& a, const Mat4& b) {
     return r;
 }
 
-inline Mat4 translation(float x, float y, float z) {
+constexpr Mat4 translation(float x, float y, float z) {
     Mat4 r;
     r.m[12] = x;
     r.m[13] = y;
@@ -134,7 +139,7 @@ inline Mat4 lookAt(Vec3 eye, Vec3 target, Vec3 up) {
 }
 
 // 画面ピクセル。原点は左上、y は下向き。
-inline Mat4 orthoTopLeft(float width, float height) {
+constexpr Mat4 orthoTopLeft(float width, float height) {
     Mat4 r;
     for (int i = 0; i < 16; ++i) r.m[i] = 0;
     r.m[0] = 2.0f / width;
@@ -147,7 +152,7 @@ inline Mat4 orthoTopLeft(float width, float height) {
 }
 
 // 列は right, up, forward。ローカル +Z が前、+X が右、+Y が上。
-inline Mat4 basis(Vec3 pos, Vec3 right, Vec3 up, Vec3 forward) {
+constexpr Mat4 basis(Vec3 pos, Vec3 right, Vec3 up, Vec3 forward) {
     Mat4 r;
     r.m[0] = right.x;
     r.m[1] = right.y;
@@ -163,3 +168,8 @@ inline Mat4 basis(Vec3 pos, Vec3 right, Vec3 up, Vec3 forward) {
     r.m[14] = pos.z;
     return r;
 }
+
+// コンパイル時計算が本当に効いていることの確認 (通らなければビルドが落ちる)。
+static_assert(clampf(2.0f, 0.0f, 1.0f) == 1.0f, "clampf must be constexpr");
+static_assert(wrapPi(0.5f) == 0.5f, "wrapPi must be constexpr");
+static_assert(dot(Vec3{1, 0, 0}, Vec3{0, 1, 0}) == 0.0f, "Vec3 ops must be constexpr");

@@ -1,3 +1,9 @@
 build/
 build-native/
 build-package/
+drift_tuning.txt
+build-single/
+
+# 記録共有サーバー (server/) のローカル生成物
+server/node_modules/
+server/.wrangler/

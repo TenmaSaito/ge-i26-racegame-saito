@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ドリフトレース（仮） | AQUART</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: #eaf6ff;
+    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+    background: linear-gradient(180deg, #0a2e46 0%, #0d4a66 55%, #0a6a8a 100%);
+    display: flex; flex-direction: column; align-items: center;
+  }
+  header { text-align: center; padding: 12px 16px 2px; }
+  header h1 { margin: 0; font-size: clamp(20px, 3vw, 28px); letter-spacing: .08em; }
+  header p { margin: 4px 0 0; opacity: .85; font-size: 13px; }
+  #wrap {
+    /* 画面の高さにも収まる幅にする（見出し+操作ボタン分を引く） */
+    width: min(1280px, 96vw, calc((100dvh - 250px) * 16 / 9));
+    margin: 10px auto 6px;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0,0,0,.45);
+    background: #000;
+  }
+  canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
+  #status { min-height: 1.4em; text-align: center; opacity: .85; font-size: 13px; }
+  .bar { display: flex; gap: 10px; justify-content: center; margin: 8px 0 4px; }
+  button {
+    cursor: pointer; border: 1px solid rgba(255,255,255,.35); color: #eaf6ff;
+    background: rgba(255,255,255,.12); border-radius: 999px; padding: 8px 18px; font-size: 14px;
+  }
+  button:hover { background: rgba(255,255,255,.22); }
+  #debugPanel {
+    width: min(1280px, 96vw, calc((100dvh - 250px) * 16 / 9));
+    margin: 8px auto 0; padding: 10px 16px 12px;
+    background: rgba(3, 12, 20, .78); border: 1px solid rgba(255,255,255,.16);
+    border-radius: 12px;
+  }
+  #debugPanel .dbg-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12.5px; letter-spacing: .12em; opacity: .9;
+  }
+  #debugPanel label { letter-spacing: 0; cursor: pointer; }
+  #debugText {
+    margin: 6px 0 0; font-family: ui-monospace, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.75; white-space: pre-wrap; color: #d7efff;
+  }
+  .howto {
+    width: min(1280px, 96vw); margin: 10px auto 34px; padding: 14px 18px;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
+    border-radius: 12px; font-size: 13.5px; line-height: 1.9;
+  }
+  .howto b { color: #bfe9ff; }
+  .credit { text-align:center; font-size:12px; opacity:.75; margin: 4px auto 26px; }
+
+  a { color: #9fdcff; }
+  /* サイト共通の外枠バー (AQUART の各サブページへのジャンプ用) */
+  .frame-bar{
+    width:100%; display:flex; justify-content:space-between; align-items:center;
+    padding:10px 20px; background:rgba(4,30,44,.88); border-bottom:1px solid rgba(255,255,255,.14);
+  }
+  .frame-bar .logo{color:#eaf6ff; text-decoration:none; font-weight:800; letter-spacing:.14em; font-size:17px}
+  .frame-bar .logo small{display:block; font-size:9px; letter-spacing:.3em; opacity:.65; font-weight:600}
+  .frame-bar nav{display:flex; gap:18px; align-items:center}
+  .frame-bar nav a{color:#cfeeff; text-decoration:none; font-size:12.5px; font-weight:700; letter-spacing:.14em}
+  .frame-bar nav a:hover{color:#fff}
+  .frame-bar nav .current{color:#7fd4ff; font-size:12.5px; font-weight:700; letter-spacing:.14em}
+  .name-field { display: flex; align-items: center; gap: 8px; font-size: 13px; opacity: .9; }
+  .name-field input {
+    width: 9.5em; padding: 7px 12px; border-radius: 999px; font-size: 14px; letter-spacing: .08em;
+    color: #eaf6ff; background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.35);
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+  <!-- 外枠バー：AQUART の入口・ポートフォリオへ戻れる共通枠 -->
+  <header class="frame-bar">
+    <a class="logo" href="../">AQUART<small>SAITO TENMA</small></a>
+    <nav>
+      <a href="../">TOP</a>
+      <a href="../portfolio/">PORTFOLIO</a>
+      <span class="current">RACE GAME</span>
+    </nav>
+  </header>
+<header>
+  <h1>ドリフトレース（仮）</h1>
+  <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
+  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-30 · AI RIVALS</p>
+</header>
+
+<div id="wrap">
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+</div>
+<div id="status">読み込み中…</div>
+<div id="audioState" style="text-align:center;font-size:12px;opacity:.8;min-height:1.3em;">AUDIO: -</div>
+<div class="bar">
+  <label class="name-field">プレイヤー名 <input id="playerName" type="text" maxlength="12" placeholder="PLAYER" autocomplete="off" spellcheck="false"></label>
+  <button id="fs" type="button">全画面で遊ぶ</button>
+</div>
+
+<div id="debugPanel">
+  <div class="dbg-head"><span>DRIFT DEBUG</span><label><input type="checkbox" id="dbgToggle" checked> 表示</label></div>
+  <pre id="debugText">読み込み中…</pre>
+</div>
+
+<div class="howto">
+  <b>操作</b><br>
+  W / ↑：アクセル　S / ↓：ブレーキ　A・D：ステアリング<br>
+  ドリフト：Space（または Shift / Ctrl）を押しながら A・D ／ 矢印キーを右スティック代わりに使うツインスティック方式も可<br>
+  ドリフト中はマウスを横に動かすと、ドリフト開始位置からのずれで角度を調整できます<br>
+  ゲームパッド対応：左スティック＝ステア、右スティック＝ドリフト、B / LB / RB＝ドリフト、RT / LT＝アクセル / ブレーキ（ブラウザではパッドのボタンを一度押すと認識されます。認識状態は下のデバッグ欄の PAD に表示）<br>
+  1 / 2 / 3：車種切替（BALANCE / DRIFT / SPEED）　C：カメラ（CHASE / CLOSE / FAR / DRIVER）<br>
+  T：ドリフト調整パネル　R：リセット　P：一時停止　F：全画面（切替）<br>
+  タイトル画面で Enter / クリック / パッド START でスタート。3 周走るとゴール（リザルト画面）になります<br>
+  ドリフトのデバッグ情報は、ゲーム画面の下のパネルに表示されます
+</div>
+<p class="credit">音源：<a href="https://soundeffect-lab.info/" target="_blank" rel="noopener">効果音ラボ</a></p>
+
+
+<script>
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    setStatus: function (text) {
+      document.getElementById('status').textContent = text || '';
+    },
+    totalDependencies: 0,
+    monitorRunDependencies: function (left) {
+      this.totalDependencies = Math.max(this.totalDependencies, left);
+      Module.setStatus(left ? '読み込み中… (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')' : '');
+    }
+  };
+  Module.setStatus('読み込み中…');
+  window.addEventListener('error', function () {
+    Module.setStatus('読み込みでエラーが発生しました。再読み込みしてください。');
+  });
+  var canvasEl = document.getElementById('canvas');
+  canvasEl.addEventListener('click', function () { canvasEl.focus(); });
+  // 全画面はゲーム側（SDL）に任せる。ページ側から強制すると
+  // キャンバスと描画バッファが食い違って暗転するため、F キーを送る。
+  window.raceSetDebug = function (t) {
+    var el = document.getElementById('debugText');
+    if (el) el.textContent = t;
+  };
+  document.getElementById('dbgToggle').addEventListener('change', function (e) {
+    document.getElementById('debugText').style.display = e.target.checked ? '' : 'none';
+  });
+  document.getElementById('fs').addEventListener('click', function () {
+    canvasEl.focus();
+    var opt = { key: 'f', code: 'KeyF', keyCode: 70, which: 70, bubbles: true, cancelable: true };
+    canvasEl.dispatchEvent(new KeyboardEvent('keydown', opt));
+    canvasEl.dispatchEvent(new KeyboardEvent('keyup', opt));
+  });
+</script>
+<script>
+  // 走行記録の共有サーバー (server/README.md の手順で Cloudflare Workers に置いた URL)。
+  // 空のままなら記録は手元 (このブラウザ) だけに残り、AI の学習もそれで行う。
+  window.RACEGAME_API = window.RACEGAME_API || '';
+
+  // プレイヤー名の入力欄。英大文字・数字・_- の 12 文字まで (ゲーム内フォントで
+  // 表示できる文字だけ)。値は localStorage に保存し、次のレースから使われる。
+  (function () {
+    var KEY = 'racegamePlayerName';
+    var input = document.getElementById('playerName');
+    if (!input) return;
+    try { input.value = localStorage.getItem(KEY) || ''; } catch (e) {}
+    function clean(s) { return String(s).toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 12); }
+    input.addEventListener('input', function () {
+      var v = clean(input.value);
+      if (v !== input.value) input.value = v;
+      try { localStorage.setItem(KEY, v); } catch (e) {}
+    });
+    // 入力中のキーがゲームの操作として扱われないようにする。
+    ['keydown', 'keyup', 'keypress'].forEach(function (type) {
+      input.addEventListener(type, function (e) { e.stopPropagation(); });
+    });
+  })();
+</script>
+<script async src="racegame.js"></script>
+<script>
+// 音声の状態表示。自動再生制限の解除 (クリック・キー・タッチ・パッドで
+// AudioContext を再開) とタブ切替時の一時停止はゲーム本体 (audio.cpp) が
+// 行うので、ページ側は状態を表示するだけでよい。
+(function () {
+  var el = document.getElementById('audioState');
+  if (!el) return;
+  var labels = { running: '再生中', suspended: 'クリックまたはキー操作で音が出ます', closed: '停止' };
+  setInterval(function () {
+    var sdl = window.Module && Module.SDL2;
+    var ctx = sdl && sdl.audioContext;
+    var state = ctx ? ctx.state : 'loading';
+    el.textContent = 'AUDIO: ' + (labels[state] || '準備中');
+  }, 300);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+#include "race.hpp"
+
+// tick の本体。スタートライン通過 (s の巻き戻り) を検出して周回を数える。
+void Race::reset() {
+    completed_ = 0;
+    timing_ = false;
+    lap_ = 0;
+    best_ = -1;
+    lastLap_ = -1;
+    total_ = 0;
+    prevS_ = -1;
+}
+
+void Race::tick(float s, float length, float dt) {
+    // カウント中は周回判定を止める。s の追跡だけ続けて、GO の瞬間に
+    // ライン通過と誤検出しないようにする。
+    if (goFlash_ > 0) {
+        goFlash_ -= dt;
+    }
+    if (launchBoost_ > 0) {
+        launchBoost_ -= dt;
+    }
+    if (countdown_ > 0) {
+        // ロケットスタートの溜め: 踏み続けると約 1.1 秒で満タン、
+        // 離すと素早く冷める。満タン近くで GO を迎えると発動する。
+        if (launchHeld_) {
+            launchCharge_ += dt / 1.1f;
+            if (launchCharge_ > 1.0f) launchCharge_ = 1.0f;
+        } else {
+            launchCharge_ -= dt * 2.2f;
+            if (launchCharge_ < 0.0f) launchCharge_ = 0.0f;
+        }
+        countdown_ -= dt;
+        prevS_ = s;
+        if (countdown_ <= 0) {
+            countdown_ = 0;
+            goFlash_ = kGoFlash;
+            if (launchCharge_ > 0.55f) {
+                launchBoost_ = 0.85f;
+                launchPower_ = launchCharge_;
+            }
+            launchCharge_ = 0;
+        }
+        return;
+    }
+    if (prevS_ >= 0) {
+        float gap = (length - prevS_) + s;
+        // 後半→前半へ大きく巻き戻り、かつ移動量が小さいときだけ周回とみなす
+        // (リセットでスタートへ飛んだ場合を誤検出しないため)。
+        if (prevS_ > length * 0.5f && s < length * 0.5f && gap < 160.0f) {
+            if (timing_) {
+                if (best_ < 0 || lap_ < best_) {
+                    best_ = lap_;
+                }
+                lastLap_ = lap_;
+                total_ += lap_;
+                completed_ += 1;
+            }
+            timing_ = true;
+            lap_ = 0;
+        }
+    }
+    prevS_ = s;
+    lap_ += dt;
+}

@@ -1,0 +1,15 @@
+# 走行記録の共有サーバー (Cloudflare Workers) の設定。手順は server/README.md。
+name = "racegame-records"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# 記録の保存先 (Workers KV)。id は `npx wrangler kv namespace create RECORDS` で
+# 表示された値に置き換える。
+[[kv_namespaces]]
+binding = "RECORDS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# 記録を送ってよいページの出所 (カンマ区切り)。公開したらゲームのページの
+# オリジン (例: https://<ユーザー名>.github.io) だけに絞ると安全。
+ALLOWED_ORIGINS = "*"

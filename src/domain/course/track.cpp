@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <sstream>
 
 namespace {
@@ -47,9 +46,9 @@ Vec3 onRoad(const Track& track, int index, float lateral) {
     };
 }
 
-void addRibbon(CpuMesh& mesh, const Track& track, float lat0, float lat1, Vec3 color, bool flatOuter) {
+void addRibbon(CpuMesh& mesh, const Track& track, float lat0, float lat1, Vec3 color, bool flatOuter, int from, int to) {
     const int n = static_cast<int>(track.samples.size());
-    for (int i = 0; i < n; ++i) {
+    for (int i = from; i < to; ++i) {
         int j = (i + 1) % n;
         Vec3 a = onRoad(track, i, lat0);
         Vec3 b = onRoad(track, i, lat1);
@@ -77,7 +76,7 @@ void addRibbon(CpuMesh& mesh, const Track& track, float lat0, float lat1, Vec3 c
     }
 }
 
-void addWalls(CpuMesh& mesh, const Track& track) {
+void addWalls(CpuMesh& mesh, const Track& track, int from, int to) {
     const int n = static_cast<int>(track.samples.size());
     const float inner = track.wallLateral();
     const float outer = inner + 0.4f;
@@ -85,7 +84,7 @@ void addWalls(CpuMesh& mesh, const Track& track) {
     const Vec3 concrete{0.62f, 0.63f, 0.66f};
     for (int side = -1; side <= 1; side += 2) {
         float sign = float(side);
-        for (int i = 0; i < n; ++i) {
+        for (int i = from; i < to; ++i) {
             int j = (i + 1) % n;
             Vec3 a = onRoad(track, i, sign * inner);
             Vec3 b = onRoad(track, j, sign * inner);
@@ -109,7 +108,8 @@ void addWalls(CpuMesh& mesh, const Track& track) {
     }
 }
 
-void addCurbs(CpuMesh& mesh, const Track& track) {
+
+void addCurbs(CpuMesh& mesh, const Track& track, int from, int to) {
     const int n = static_cast<int>(track.samples.size());
     const Vec3 red{0.75f, 0.09f, 0.08f};
     const Vec3 white{0.90f, 0.90f, 0.92f};
@@ -117,7 +117,7 @@ void addCurbs(CpuMesh& mesh, const Track& track) {
         float sign = float(side);
         float inner = sign * track.halfWidth;
         float outer = sign * (track.halfWidth + track.curbWidth);
-        for (int i = 0; i < n; ++i) {
+        for (int i = from; i < to; ++i) {
             int j = (i + 1) % n;
             bool paint = (static_cast<int>(track.samples[i].s / 3.0f) % 2) == 0;
             Vec3 color = paint ? red : white;
@@ -242,11 +242,8 @@ void addGround(CpuMesh& mesh, const Track& track) {
 
 }  // namespace
 
-bool Track::load(const std::string& path) {
-    std::ifstream in(path);
-    if (!in) {
-        return false;
-    }
+bool Track::loadFromText(const std::string& text) {
+    std::istringstream in(text);
 
     enum class Mode { Top, Names, Samples, Pit };
     Mode mode = Mode::Top;
@@ -309,6 +306,8 @@ bool Track::load(const std::string& path) {
             ss >> halfWidth;
         } else if (key == "curb_width") {
             ss >> curbWidth;
+        } else if (key == "runoff") {
+            ss >> runoff;
         } else if (key == "length") {
             ss >> length;
         } else if (key == "spawn") {
@@ -337,17 +336,35 @@ bool Track::load(const std::string& path) {
         length += std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
     }
 
-    visual = CpuMesh{};
-    addGround(visual, *this);
-    const float curbOuter = halfWidth + curbWidth;
-    const float grassOuter = curbOuter + runoff;
-    addRibbon(visual, *this, -grassOuter, -curbOuter, {0.15f, 0.36f, 0.14f}, true);
-    addRibbon(visual, *this, curbOuter, grassOuter, {0.15f, 0.36f, 0.14f}, true);
-    addRibbon(visual, *this, -halfWidth, halfWidth, {0.17f, 0.17f, 0.19f}, false);
-    addCurbs(visual, *this);
-    addWalls(visual, *this);
-    addPit(visual, pit);
-    addStartLine(visual, *this);
+    // 路面メッシュも景観と同じ 120 サンプル単位のチャンクに分ける。
+    // 遠くのチャンクは描画自体を省けるので、頂点処理が大幅に減る。
+    // （地面の大きな一枚板は backdrop 側で常時描く。）
+    visualChunks.clear();
+    visualCenters.clear();
+    {
+        const int n = static_cast<int>(samples.size());
+        const int per = 120;
+        const float curbOuter = halfWidth + curbWidth;
+        const float grassOuter = curbOuter + runoff;
+        for (int from = 0; from < n; from += per) {
+            const int to = std::min(n, from + per);
+            CpuMesh chunk;
+            addRibbon(chunk, *this, -grassOuter, -curbOuter, {0.15f, 0.36f, 0.14f}, true, from, to);
+            addRibbon(chunk, *this, curbOuter, grassOuter, {0.15f, 0.36f, 0.14f}, true, from, to);
+            addRibbon(chunk, *this, -(grassOuter + 30.0f), -grassOuter, {0.11f, 0.28f, 0.11f}, true, from, to);
+            addRibbon(chunk, *this, grassOuter, grassOuter + 30.0f, {0.11f, 0.28f, 0.11f}, true, from, to);
+            addRibbon(chunk, *this, -halfWidth, halfWidth, {0.17f, 0.17f, 0.19f}, false, from, to);
+            addCurbs(chunk, *this, from, to);
+            addWalls(chunk, *this, from, to);
+            if (from == 0) {
+                addPit(chunk, pit);
+                addStartLine(chunk, *this);
+            }
+            visualChunks.push_back(std::move(chunk));
+            const TrackSample& mid = samples[size_t((from + to) / 2)];
+            visualCenters.push_back({mid.x, mid.y, mid.z});
+        }
+    }
     return true;
 }
 
@@ -355,14 +372,14 @@ TrackPose Track::query(float x, float z, float yHint, float preferS) const {
     TrackPose best;
     float bestScore = 1.0e30f;
     const int n = static_cast<int>(samples.size());
-    for (int i = 0; i < n; ++i) {
+    auto consider = [&](int i) {
         const TrackSample& a = samples[i];
         const TrackSample& b = samples[(i + 1) % n];
         float abx = b.x - a.x;
         float abz = b.z - a.z;
         float len2 = abx * abx + abz * abz;
         if (len2 < 1e-4f) {
-            continue;
+            return;
         }
         float t = ((x - a.x) * abx + (z - a.z) * abz) / len2;
         t = clampf(t, 0.0f, 1.0f);
@@ -384,7 +401,7 @@ TrackPose Track::query(float x, float z, float yHint, float preferS) const {
             score += ds * 0.2f;
         }
         if (score >= bestScore) {
-            continue;
+            return;
         }
         bestScore = score;
         float invLen = 1.0f / std::sqrt(len2);
@@ -399,6 +416,143 @@ TrackPose Track::query(float x, float z, float yHint, float preferS) const {
         best.rightZ = -tx;
         best.lateral = dx * best.rightX + dz * best.rightZ;
         best.centerY = cy;
+        best.cross = a.cross + (b.cross - a.cross) * t;
+        best.yaw = std::atan2(tx, tz);
+        best.xzDist = std::sqrt(dx * dx + dz * dz);
+        best.corner = t < 0.5f ? a.corner : b.corner;
+        best.nameId = t < 0.5f ? a.nameId : b.nameId;
+    };
+    // 高速パス: 周回位置の目安があるときは、その前後 ±50 区間（約±100m）だけ
+    // 先に調べる。通常の走行では最寄り路面は必ずこの中にあるので、全区間
+    // 走査（最大 2000 区間）はほぼ不要になる。近くに見つからなければ
+    // （テレポート直後など）従来通り全走査にフォールバックする。
+    if (preferS >= 0.0f && length > 1.0f && n > 120) {
+        int lo = 0, hi = n - 1, center = n - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2;
+            if (samples[mid].s < preferS) {
+                lo = mid + 1;
+            } else {
+                center = mid;
+                hi = mid - 1;
+            }
+        }
+        for (int k = -50; k <= 50; ++k) {
+            consider((center + k + n) % n);
+        }
+        if (best.found && best.xzDist < 30.0f) {
+            return best;
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        consider(i);
+    }
+    return best;
+}
+
+TrackPose Track::queryPlanar(float x, float z) const {
+    TrackPose best;
+    float bestScore = 1.0e30f;
+    const int n = static_cast<int>(samples.size());
+    // 全区間の投影は重い (地形生成で何万回も呼ぶ)。まずサンプル「点」の
+    // 最寄りを求め、その前後 24 区間だけを投影評価する。サンプル間隔は
+    // 約 4m なので、本当の最寄り区間は必ずこの窓の中にある。
+    int nearIdx = 0;
+    float nearD2 = 1.0e30f;
+    for (int i = 0; i < n; ++i) {
+        float dx = x - samples[i].x;
+        float dz = z - samples[i].z;
+        float d2 = dx * dx + dz * dz;
+        if (d2 < nearD2) {
+            nearD2 = d2;
+            nearIdx = i;
+        }
+    }
+    for (int k = -24; k <= 24; ++k) {
+        int i = (nearIdx + k) % n;
+        if (i < 0) i += n;
+        const TrackSample& a = samples[i];
+        const TrackSample& b = samples[(i + 1) % n];
+        float abx = b.x - a.x;
+        float abz = b.z - a.z;
+        float len2 = abx * abx + abz * abz;
+        if (len2 < 1e-4f) {
+            continue;
+        }
+        float t = ((x - a.x) * abx + (z - a.z) * abz) / len2;
+        t = clampf(t, 0.0f, 1.0f);
+        float cx = a.x + abx * t;
+        float cz = a.z + abz * t;
+        float dx = x - cx;
+        float dz = z - cz;
+        float score = dx * dx + dz * dz;  // 平面距離のみ (高さは見ない)
+        if (score >= bestScore) {
+            continue;
+        }
+        bestScore = score;
+        float invLen = 1.0f / std::sqrt(len2);
+        float tx = abx * invLen;
+        float tz = abz * invLen;
+        best.found = true;
+        best.s = a.s + std::sqrt(len2) * t;
+        if (best.s >= length) {
+            best.s -= length;
+        }
+        best.rightX = tz;
+        best.rightZ = -tx;
+        best.lateral = dx * best.rightX + dz * best.rightZ;
+        best.centerY = a.y + (b.y - a.y) * t;
+        best.cross = a.cross + (b.cross - a.cross) * t;
+        best.yaw = std::atan2(tx, tz);
+        best.xzDist = std::sqrt(dx * dx + dz * dz);
+        best.corner = t < 0.5f ? a.corner : b.corner;
+        best.nameId = t < 0.5f ? a.nameId : b.nameId;
+    }
+    return best;
+}
+
+TrackPose Track::queryPlanarNear(float x, float z, int centerIdx) const {
+    TrackPose best;
+    float bestScore = 1.0e30f;
+    const int n = static_cast<int>(samples.size());
+    // 全区間の投影は重い (地形生成で何万回も呼ぶ)。まずサンプル「点」の
+    // 最寄りを求め、その前後 24 区間だけを投影評価する。サンプル間隔は
+    // 約 4m なので、本当の最寄り区間は必ずこの窓の中にある。
+    const int nearIdx = centerIdx;  // 窓の中心は呼び出し側が決める
+    for (int k = -24; k <= 24; ++k) {
+        int i = (nearIdx + k) % n;
+        if (i < 0) i += n;
+        const TrackSample& a = samples[i];
+        const TrackSample& b = samples[(i + 1) % n];
+        float abx = b.x - a.x;
+        float abz = b.z - a.z;
+        float len2 = abx * abx + abz * abz;
+        if (len2 < 1e-4f) {
+            continue;
+        }
+        float t = ((x - a.x) * abx + (z - a.z) * abz) / len2;
+        t = clampf(t, 0.0f, 1.0f);
+        float cx = a.x + abx * t;
+        float cz = a.z + abz * t;
+        float dx = x - cx;
+        float dz = z - cz;
+        float score = dx * dx + dz * dz;  // 平面距離のみ (高さは見ない)
+        if (score >= bestScore) {
+            continue;
+        }
+        bestScore = score;
+        float invLen = 1.0f / std::sqrt(len2);
+        float tx = abx * invLen;
+        float tz = abz * invLen;
+        best.found = true;
+        best.s = a.s + std::sqrt(len2) * t;
+        if (best.s >= length) {
+            best.s -= length;
+        }
+        best.rightX = tz;
+        best.rightZ = -tx;
+        best.lateral = dx * best.rightX + dz * best.rightZ;
+        best.centerY = a.y + (b.y - a.y) * t;
         best.cross = a.cross + (b.cross - a.cross) * t;
         best.yaw = std::atan2(tx, tz);
         best.xzDist = std::sqrt(dx * dx + dz * dz);

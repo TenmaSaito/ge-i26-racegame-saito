@@ -1,23 +1,17 @@
 #include "render.hpp"
 
+#include "glapi.hpp"  // gl 関数の入手口 (環境ごとの差はここで吸収)
+
 #include <SDL.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 
-#ifdef __EMSCRIPTEN__
-#include <GLES3/gl3.h>
-#else
-#define GL_GLEXT_PROTOTYPES 1
-#include <GL/gl.h>
-#include <GL/glext.h>
-#endif
-
 namespace {
 
 const char* kVersion =
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
     "#version 300 es\nprecision highp float;\n";
 #else
     "#version 330 core\n";
@@ -46,17 +40,18 @@ in vec3 vNormal;
 in vec3 vColor;
 in vec3 vWorld;
 uniform vec3 uCamPos;
+uniform float uAlpha;
 out vec4 fragColor;
 void main() {
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 sun = normalize(vec3(0.35, 0.86, 0.28));
-    float light = 0.36 + 0.64 * max(dot(n, sun), 0.0);
+    float light = 0.47 + 0.53 * max(dot(n, sun), 0.0);
     vec3 color = vColor * light;
     float dist = distance(vWorld, uCamPos);
     float fog = clamp((dist - 90.0) / 1500.0, 0.0, 1.0);
     vec3 haze = vec3(0.62, 0.74, 0.84);
-    fragColor = vec4(mix(color, haze, fog), 1.0);
+    fragColor = vec4(mix(color, haze, fog), uAlpha);
 }
 )GLSL";
 
@@ -99,8 +94,9 @@ void main() {
 }
 )GLSL";
 
-// 5x7。bit4 が左端。並びは 0-9 A-Z . : - / %
-constexpr char kGlyphOrder[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.:-/%";
+// 5x7。bit4 が左端。並びは 0-9 A-Z . : - / % と、記号 < > ( ) ! # _ | + ,
+// (記号は選択画面の < >、"GO!"、"(C)"、"#1"、名前の _ などで使う)
+constexpr char kGlyphOrder[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.:-/%<>()!#_|+,";
 const std::uint8_t kFont[][7] = {
     {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
     {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, {0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E},
@@ -123,6 +119,11 @@ const std::uint8_t kFont[][7] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C}, {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00},
     {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}, {0x01, 0x02, 0x04, 0x04, 0x08, 0x10, 0x10},
     {0x19, 0x1A, 0x02, 0x04, 0x08, 0x0B, 0x13},
+    {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02}, {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08},  // < >
+    {0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02}, {0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08},  // ( )
+    {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}, {0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A},  // ! #
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F}, {0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},  // _ |
+    {0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00}, {0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08},  // + ,
 };
 static_assert(sizeof(kFont) / sizeof(kFont[0]) == sizeof(kGlyphOrder) - 1, "glyph count");
 
@@ -178,7 +179,59 @@ int glyphIndex(char c) {
 
 }  // namespace
 
-bool Renderer::init() {
+
+// ---------------------------------------------------------------------------
+// GlRenderer: IRenderer の OpenGL 実装 (外側の層)。
+// シェーダ文字列・GL オブジェクト・描画状態はすべてこの実装の中に閉じる。
+// ---------------------------------------------------------------------------
+struct GlRenderer final : IRenderer {
+        int w = 1;
+    int h = 1;
+    int fullW = 1;  // 子画面中も覚えておく全画面サイズ
+    int fullH = 1;
+
+    bool init() override;
+    void resize(int w, int h) override;
+    void setViewport(int x, int yFromBottom, int w, int h) override;
+    void clearViewport() override;
+    int width() const override { return w; }
+    int height() const override { return h; }
+    void clearFrame() override;
+    void drawSky() override;
+    void beginWorld(const Mat4& viewProj, Vec3 cameraPos) override;
+    void draw(const GpuMesh& mesh, const Mat4& model) override;
+    void drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) override;
+    void drawDynamic(const CpuMesh& mesh) override;
+    void beginHud() override;
+    void addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) override;
+    void drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a) override;
+    void drawText(float x, float y, float scale, const char* text, float r, float g, float b, float a) override;
+    void flushHud() override;
+    GpuMesh upload(const CpuMesh& mesh) override;
+
+    unsigned worldProgram = 0;
+    unsigned skyProgram = 0;
+    unsigned hudProgram = 0;
+    unsigned dummyVao = 0;
+    unsigned hudVao = 0;
+    unsigned hudVbo = 0;
+    unsigned hudIbo = 0;
+    unsigned dynVao = 0;
+    unsigned dynVbo = 0;
+    unsigned dynIbo = 0;
+    int uViewProj = -1;
+    int uAlphaLoc = -1;  // 半透明描画用の不透明度 uniform
+    int uModel = -1;
+    int uCamPos = -1;
+    int uOrtho = -1;
+    std::vector<float> hudVerts;
+    std::vector<unsigned> hudIndices;
+};
+
+bool GlRenderer::init() {
+    if (!loadGlFunctions()) {
+        return false;  // Windows で GL 3.3 の関数が取れない (ドライバが古い等)
+    }
     glGenVertexArrays(1, &dummyVao);
     worldProgram = linkProgram(kWorldVs, kWorldFs);
     skyProgram = linkProgram(kSkyVs, kSkyFs);
@@ -187,6 +240,7 @@ bool Renderer::init() {
         return false;
     }
     uViewProj = glGetUniformLocation(worldProgram, "uViewProj");
+    uAlphaLoc = glGetUniformLocation(worldProgram, "uAlpha");
     uModel = glGetUniformLocation(worldProgram, "uModel");
     uCamPos = glGetUniformLocation(worldProgram, "uCamPos");
     uOrtho = glGetUniformLocation(hudProgram, "uOrtho");
@@ -207,22 +261,39 @@ bool Renderer::init() {
     glDisable(GL_CULL_FACE);
     // lookAt は左右を直すために鏡映になっている。巻き方向が反転するので、表の判定も合わせる。
     glFrontFace(GL_CW);
-    resize(width, height);
+    resize(w, h);
     return true;
 }
 
-void Renderer::clearFrame() {
+void GlRenderer::clearFrame() {
     glClearColor(0.62f, 0.74f, 0.84f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void Renderer::resize(int newWidth, int newHeight) {
-    width = newWidth > 0 ? newWidth : 1;
-    height = newHeight > 0 ? newHeight : 1;
-    glViewport(0, 0, width, height);
+void GlRenderer::resize(int newWidth, int newHeight) {
+    w = newWidth > 0 ? newWidth : 1;
+    h = newHeight > 0 ? newHeight : 1;
+    fullW = w;
+    fullH = h;
+    glViewport(0, 0, w, h);
 }
 
-void Renderer::drawSky() {
+void GlRenderer::setViewport(int x, int yFromBottom, int vw, int vh) {
+    glEnable(GL_SCISSOR_TEST);  // clear もこの範囲だけに効かせる
+    glScissor(x, yFromBottom, vw, vh);
+    glViewport(x, yFromBottom, vw, vh);
+    w = vw > 0 ? vw : 1;  // 投影のアスペクト計算用に子画面サイズを返す
+    h = vh > 0 ? vh : 1;
+}
+
+void GlRenderer::clearViewport() {
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, fullW, fullH);
+    w = fullW;
+    h = fullH;
+}
+
+void GlRenderer::drawSky() {
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glUseProgram(skyProgram);
@@ -232,15 +303,29 @@ void Renderer::drawSky() {
     glEnable(GL_DEPTH_TEST);
 }
 
-void Renderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
+void GlRenderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
     glUseProgram(worldProgram);
     glUniformMatrix4fv(uViewProj, 1, GL_FALSE, viewProj.m);
     glUniform3f(uCamPos, cameraPos.x, cameraPos.y, cameraPos.z);
+    glUniform1f(uAlphaLoc, 1.0f);  // 通常描画は不透明 (ゴースト描画が戻し忘れても安全なよう毎回)
 }
 
-void Renderer::draw(const GpuMesh& mesh, const Mat4& model) {
+// 半透明描画 (ゴースト用)。ブレンドを有効化し、深度書き込みを止めて
+// 描くことで、重なった部分も自然に透ける。終わったら状態を戻す。
+void GlRenderer::drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glUniform1f(uAlphaLoc, alpha);
+    draw(mesh, model);
+    glUniform1f(uAlphaLoc, 1.0f);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+void GlRenderer::draw(const GpuMesh& mesh, const Mat4& model) {
     if (mesh.indexCount <= 0) {
         return;
     }
@@ -249,12 +334,42 @@ void Renderer::draw(const GpuMesh& mesh, const Mat4& model) {
     glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
 }
 
-void Renderer::beginHud() {
+void GlRenderer::drawDynamic(const CpuMesh& mesh) {
+    if (mesh.indices.empty()) {
+        return;
+    }
+    if (dynVao == 0) {
+        glGenVertexArrays(1, &dynVao);
+        glGenBuffers(1, &dynVbo);
+        glGenBuffers(1, &dynIbo);
+        glBindVertexArray(dynVao);
+        glBindBuffer(GL_ARRAY_BUFFER, dynVbo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dynIbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), reinterpret_cast<void*>(6 * sizeof(float)));
+    }
+    glBindVertexArray(dynVao);
+    glBindBuffer(GL_ARRAY_BUFFER, dynVbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(mesh.vertices.size() * sizeof(float)),
+                 mesh.vertices.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dynIbo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(mesh.indices.size() * sizeof(std::uint32_t)),
+                 mesh.indices.data(), GL_DYNAMIC_DRAW);
+    Mat4 identity;
+    glUniformMatrix4fv(uModel, 1, GL_FALSE, identity.m);
+    glDrawElements(GL_TRIANGLES, static_cast<int>(mesh.indices.size()), GL_UNSIGNED_INT, nullptr);
+}
+
+void GlRenderer::beginHud() {
     hudVerts.clear();
     hudIndices.clear();
 }
 
-void Renderer::addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
+void GlRenderer::addQuad(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
     unsigned base = static_cast<unsigned>(hudVerts.size() / 6);
     float verts[] = {
         x0, y0, r, g, b, a, x1, y0, r, g, b, a, x1, y1, r, g, b, a, x0, y1, r, g, b, a,
@@ -264,7 +379,7 @@ void Renderer::addQuad(float x0, float y0, float x1, float y1, float r, float g,
     hudIndices.insert(hudIndices.end(), idx, idx + 6);
 }
 
-void Renderer::drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a) {
+void GlRenderer::drawLine(float x0, float y0, float x1, float y1, float thickness, float r, float g, float b, float a) {
     float dx = x1 - x0;
     float dy = y1 - y0;
     float len = std::sqrt(dx * dx + dy * dy);
@@ -285,7 +400,7 @@ void Renderer::drawLine(float x0, float y0, float x1, float y1, float thickness,
     hudIndices.insert(hudIndices.end(), idx, idx + 6);
 }
 
-void Renderer::drawText(float x, float y, float scale, const char* text, float r, float g, float b, float a) {
+void GlRenderer::drawText(float x, float y, float scale, const char* text, float r, float g, float b, float a) {
     float pen = x;
     for (const char* cursor = text; *cursor; ++cursor) {
         char c = *cursor;
@@ -316,7 +431,7 @@ void Renderer::drawText(float x, float y, float scale, const char* text, float r
     }
 }
 
-void Renderer::flushHud() {
+void GlRenderer::flushHud() {
     if (hudIndices.empty()) {
         return;
     }
@@ -324,7 +439,7 @@ void Renderer::flushHud() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(hudProgram);
-    Mat4 ortho = orthoTopLeft(float(width), float(height));
+    Mat4 ortho = orthoTopLeft(float(w), float(h));
     glUniformMatrix4fv(uOrtho, 1, GL_FALSE, ortho.m);
     glBindVertexArray(hudVao);
     glBindBuffer(GL_ARRAY_BUFFER, hudVbo);
@@ -336,7 +451,7 @@ void Renderer::flushHud() {
     glEnable(GL_DEPTH_TEST);
 }
 
-GpuMesh Renderer::upload(const CpuMesh& mesh) {
+GpuMesh GlRenderer::upload(const CpuMesh& mesh) {
     GpuMesh gpu;
     if (mesh.indices.empty()) {
         return gpu;
@@ -359,3 +474,6 @@ GpuMesh Renderer::upload(const CpuMesh& mesh) {
     glBindVertexArray(dummyVao);
     return gpu;
 }
+
+IRenderer* createRenderer() { return new GlRenderer(); }
+void destroyRenderer(IRenderer* renderer) { delete renderer; }
