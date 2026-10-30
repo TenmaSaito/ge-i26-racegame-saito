@@ -53,14 +53,15 @@ const char* aiLevelName(AiLevel level) {
 AiSkill aiSkillFor(AiLevel level, float paceAdjust) {
     AiSkill skill;
     switch (level) {
-    // 自己テスト (--self-test) の AI 単独走行で、鈴鹿のラップがおよそ
-    // EASY 132 秒 / NORMAL 111 秒 / HARD 100 秒になる値。どの強さでも壁には当たらない。
+    // 自己テスト (--self-test) の AI 単独走行 (ドリフト込み) で、鈴鹿のラップがおよそ
+    // EASY 137 秒 / NORMAL 119 秒 / HARD 105 秒になる値。どの強さでも壁にはほぼ当たらない。
     case AiLevel::Easy:
         skill.pace = 0.82f;
         skill.latAccel = 22.0f;
         skill.brakeDecel = 16.0f;
         skill.steerNoise = 0.6f;
         skill.learnWeight = 0.3f;
+        skill.driftSkill = 0.35f;
         break;
     case AiLevel::Normal:
         skill.pace = 0.93f;
@@ -68,6 +69,7 @@ AiSkill aiSkillFor(AiLevel level, float paceAdjust) {
         skill.brakeDecel = 20.0f;
         skill.steerNoise = 0.3f;
         skill.learnWeight = 0.6f;
+        skill.driftSkill = 0.7f;
         break;
     case AiLevel::Hard:
         skill.pace = 1.0f;
@@ -75,6 +77,7 @@ AiSkill aiSkillFor(AiLevel level, float paceAdjust) {
         skill.brakeDecel = 24.0f;
         skill.steerNoise = 0.08f;
         skill.learnWeight = 0.9f;
+        skill.driftSkill = 1.0f;
         break;
     }
     // 勝敗から学習したペース補正 (RecordBook が持つ、±数 %)。
@@ -90,9 +93,12 @@ void AiDriver::prepare(const Track& track, const AiSkill& skill, const std::vect
     skill_ = skill;
     rng_ = seed ? seed : 1u;
     length_ = std::max(1.0f, track.length);
+    halfWidth_ = track.halfWidth;
     lineOffset_ = 0.0f;
     noise_ = noiseTarget_ = noiseTimer_ = 0.0f;
     stuckTime_ = recoverTime_ = 0.0f;
+    drifting_ = exiting_ = planned_ = false;
+    driftTime_ = driftCool_ = driftSign_ = exitTime_ = plannedAt_ = 0.0f;
 
     const int n = static_cast<int>(track.samples.size());
     targetSpeed_.assign(size_t(std::max(n, 1)), kCarMaxSpeed);
@@ -113,6 +119,7 @@ void AiDriver::prepare(const Track& track, const AiSkill& skill, const std::vect
 
     // --- 1. 曲率 (1m 進むあいだの向きの変化) を前後 ±4 サンプルで平均する ---
     std::vector<float> curvature(size_t(n), 0.0f);
+    curvature_.assign(size_t(n), 0.0f);
     for (int i = 0; i < n; ++i) {
         float turn = 0.0f, dist = 0.0f;
         for (int k = -4; k < 4; ++k) {
@@ -120,6 +127,7 @@ void AiDriver::prepare(const Track& track, const AiSkill& skill, const std::vect
             dist += gapAt(i + k);
         }
         curvature[size_t(i)] = std::fabs(turn) / dist;
+        curvature_[size_t(i)] = turn / dist;  // 向き付き (向きの角度が増える = 右曲がり)
     }
 
     // --- 2. 曲がれる速度: 横加速度の限界とステアの切れ角の限界の小さい方 ---
@@ -182,6 +190,126 @@ void AiDriver::pointAt(const Track& track, float s, float lateral, float& x, flo
     const float heading = std::atan2(b.x - a.x, b.z - a.z);
     x = b.x + std::cos(heading) * lateral;  // 右方向 = (cos, -sin)
     z = b.z - std::sin(heading) * lateral;
+}
+
+float AiDriver::sharpestAhead(float s, float from, float to, float& turnSign) const {
+    float best = 0.0f;
+    turnSign = 0.0f;
+    if (curvature_.empty()) {
+        return 0.0f;
+    }
+    const int n = static_cast<int>(curvature_.size());
+    for (float d = from; d <= to; d += 4.0f) {
+        const int i = std::min(n - 1, std::max(0, int(wrapS(s + d, length_) / length_ * float(n))));
+        const float k = curvature_[size_t(i)];
+        if (std::fabs(k) > best) {
+            best = std::fabs(k);
+            turnSign = k > 0.0f ? 1.0f : -1.0f;
+        }
+    }
+    return best;
+}
+
+// ============================================================================
+// ドリフト
+// ============================================================================
+void AiDriver::updateDrift(const Car& car, float s, float dt, float alphaV, DriveInput& in) {
+    // 入る基準: 半径およそ 60〜90m より急なコーナー (積極的な AI ほど浅いコーナーでも入る)。
+    // ただし速度計画が十分に落ちる (およそ 140km/h 以下の) コーナーだけ。高速コーナーで
+    // 滑ると外へはらんで失速するため、ヘアピンやシケインなど低中速の所で見せる。
+    const float enterCurv = 0.0165f - 0.005f * skill_.driftSkill;
+    constexpr float kDriftCornerSpeed = 39.0f;
+    const float speed = car.speed;
+    driftCool_ = std::max(0.0f, driftCool_ - dt);
+
+    // 0.4〜2.2 秒先のコーナーを見て「ドリフトで行くか」を決め、入口に来たら滑らせる。
+    if (!drifting_ && !planned_) {
+        if (skill_.driftSkill <= 0.0f || driftCool_ > 0.0f || speed < 19.0f) {
+            return;
+        }
+        float sign = 0.0f;
+        const float k = sharpestAhead(s, speed * 0.4f, speed * 2.2f, sign);
+        if (k < enterCurv) {
+            return;
+        }
+        float cornerSpeed = kCarMaxSpeed;
+        float firstTight = -1.0f;  // コーナーの入口までの距離
+        for (float d = speed * 0.4f; d <= speed * 2.2f; d += 4.0f) {
+            cornerSpeed = std::min(cornerSpeed, targetSpeedAt(s + d));
+            const int n = static_cast<int>(curvature_.size());
+            const int i = std::min(n - 1, std::max(0, int(wrapS(s + d, length_) / length_ * float(n))));
+            if (firstTight < 0.0f && std::fabs(curvature_[size_t(i)]) >= enterCurv) firstTight = d;
+        }
+        if (cornerSpeed > kDriftCornerSpeed || firstTight < 0.0f) {
+            return;
+        }
+        // コーナーごとに「ドリフトで行くか」を積極性の確率で決める (毎回同じにならない)。
+        driftCool_ = 1.2f;
+        if (nextRandom(rng_) > 0.35f + 0.65f * skill_.driftSkill) {
+            return;
+        }
+        planned_ = true;
+        plannedAt_ = wrapS(s + firstTight, length_);
+        driftSign_ = sign;
+    }
+
+    if (planned_) {
+        // 入口の手前 (速度の 0.35 秒分) に来たら滑らせ始める。
+        const float toCorner = wrapDistance(plannedAt_ - s, length_);
+        if (toCorner < -30.0f) {
+            planned_ = false;  // 通り過ぎた (何かで遅れた等): 取りやめ
+            return;
+        }
+        if (toCorner > std::max(8.0f, speed * 0.35f)) {
+            return;
+        }
+        planned_ = false;
+        drifting_ = true;
+        exiting_ = false;
+        driftTime_ = 0.0f;
+    }
+
+    // --- 終わる条件: コーナーが開けた / 長すぎる / 遅くなりすぎた / 逆向きのコーナー /
+    //     路面の端に寄りすぎた (外へはらんだ) ----------------------------------------
+    driftTime_ += dt;
+    if (!exiting_) {
+        float sign = 0.0f;
+        const float kNear = sharpestAhead(s, 0.0f, std::max(20.0f, speed * 0.6f), sign);
+        const bool opened = kNear < enterCurv * 0.45f || (sign != 0.0f && sign != driftSign_);
+        const bool nearEdge = car.ground.found && std::fabs(car.ground.lateral) > halfWidth_ - 0.8f;
+        if ((opened && driftTime_ > 0.6f) || driftTime_ > 3.0f || speed < 11.0f || nearEdge) {
+            exiting_ = true;  // すぐには離さず、立ち上がりに入る
+            exitTime_ = 0.0f;
+        }
+    }
+
+    // --- 立ち上がり: ボタンは押したまま、ステアを戻して角度を消してから離す ---------
+    // 滑っている最中にボタンを離すと目標角度が一気に 0 になり、車がアンダーで
+    // 外へ飛び出す (プレイヤーも、角度を戻しながら抜けてから離す)。
+    if (exiting_) {
+        exitTime_ += dt;
+        const bool settled = !car.drifting || std::fabs(car.slipAngle) < 0.12f;
+        if (settled || exitTime_ > 1.2f || speed < 8.0f) {
+            drifting_ = false;
+            exiting_ = false;
+            driftCool_ = 1.0f;
+            return;
+        }
+        in.drift = true;
+        // 進んでいる向きで目標点を狙う (ステアの分だけ角度が付くので、まっすぐなら角度が消える)。
+        in.steer = std::max(-1.0f, std::min(1.0f, alphaV * 1.5f));
+        return;
+    }
+
+    // --- ドリフト中の操作 ------------------------------------------------------
+    // プレイヤーと同じ「ドリフトボタン + ステア」で滑る。滑っている間は車体の向きと
+    // 進む向きがずれているので、ステアは「進んでいる向き (速度ベクトル)」から見た
+    // 目標点の角度で決める (車体の向きで決めると、車体がコーナーの内を向いた時点で
+    // 曲がり足りていると勘違いしてステアを戻し、外へはらむ)。
+    // コーナーの向きへ少し切り増し、角度が付きすぎないよう切れ角は 6 割までにする。
+    // (値は AI 単独走行のパラメータ探索で、外へのはみ出しが最も少なかった組み合わせ)
+    in.drift = true;
+    in.steer = std::max(-0.6f, std::min(0.6f, alphaV * 2.0f + driftSign_ * 0.2f));
 }
 
 // ============================================================================
@@ -263,10 +391,16 @@ DriveInput AiDriver::drive(const Car& car, const Track& track, float dt, const s
     noise_ += (noiseTarget_ - noise_) * std::min(1.0f, dt * 4.0f);
     in.steer = std::max(-1.0f, std::min(1.0f, in.steer + noise_ * 0.25f));
 
+    // --- ドリフト: 進んでいる向き (速度ベクトル) から見た目標点の角度で操る ---
+    const float travel = (car.velX * car.velX + car.velZ * car.velZ) > 4.0f ? std::atan2(car.velX, car.velZ) : car.yaw;
+    const float alphaV = std::atan2(dx * std::cos(travel) - dz * std::sin(travel),
+                                    dx * std::sin(travel) + dz * std::cos(travel));
+    updateDrift(car, s, dt, alphaV, in);
+
     // --- アクセルとブレーキ: 少し先の狙い速度との差で決める ---------------
     const float target = std::min(targetSpeedAt(s), targetSpeedAt(s + std::max(0.0f, speed) * 0.35f));
     const float err = target - speed;
-    if (std::fabs(alpha) > 1.2f) {
+    if (std::fabs(drifting_ ? alphaV : alpha) > 1.2f) {
         in.throttle = 0.35f;  // 大きく向きがずれている (スピン後など): 控えめに立て直す
     } else if (err > 0.0f) {
         in.throttle = std::min(1.0f, 0.45f + err * 0.25f);
@@ -274,6 +408,12 @@ DriveInput AiDriver::drive(const Car& car, const Track& track, float dt, const s
         in.throttle = std::max(0.0f, 0.3f + err * 0.12f);  // 少し速い: 緩める
     } else {
         in.brake = std::min(1.0f, std::max(0.25f, -err * 0.1f));
+    }
+    if (drifting_) {
+        // ドリフト中は踏んで角度を保つ。強いブレーキはドリフトを崩すので浅めにする。
+        in.throttle = std::max(in.throttle, 0.6f);
+        in.brake = std::min(in.brake, 0.25f);
+        if (in.brake > 0.0f) in.throttle = 0.0f;
     }
     return in;
 }

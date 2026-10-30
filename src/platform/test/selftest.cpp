@@ -274,16 +274,22 @@ int aiTest(const Track& track) {
         Race race;
         race.reset();
         int wallSteps = 0;
+        int driftSteps = 0;  // AI がドリフトしていた時間 (コーナーで滑っているか)
         float maxLateral = 0.0f;
         for (int step = 0; step < 60 * 600 && race.completed() < 1; ++step) {
             DriveInput in = driver.drive(car, track, dt, {});
             car.update(dt, in, track);
             race.tick(car.ground.s, track.length, dt);
             if (car.wallContact) ++wallSteps;
+            if (car.drifting) ++driftSteps;
             maxLateral = std::max(maxLateral, std::fabs(car.ground.lateral));
         }
-        std::printf("ai-test %-6s lap %.2f s  wall %.1f s  maxLat %.1f m\n", aiLevelName(AiLevel(level)),
-                    race.lastLap(), float(wallSteps) * dt, maxLateral);
+        std::printf("ai-test %-6s lap %.2f s  wall %.1f s  drift %.1f s  maxLat %.1f m\n", aiLevelName(AiLevel(level)),
+                    race.lastLap(), float(wallSteps) * dt, float(driftSteps) * dt, maxLateral);
+        if (driftSteps == 0) {
+            std::printf("ai-test: %s never drifted\n", aiLevelName(AiLevel(level)));
+            return 51;  // AI はコーナーでドリフトすること
+        }
         if (race.completed() < 1) {
             std::printf("ai-test: %s did not finish a lap\n", aiLevelName(AiLevel(level)));
             return 40;
