@@ -11,6 +11,8 @@
 
 void buildCarNose(CpuMesh& mesh);
 void buildTailLamps(CpuMesh& mesh, Vec3 color);
+// 夜に点けるヘッドランプ (ノーズ先端の発光部。色は 1 を超える値で「光る」扱い)。
+void buildHeadLamps(CpuMesh& mesh, Vec3 color);
 // 車体の作り込み (キャノピー・ミラー・サイドポッド・ディフューザー等)。
 void buildCarDetails(CpuMesh& mesh, int spec, const Vec3* color = nullptr);
 // 車種ごとのボディ色 (0=BALANCE 赤 / 1=DRIFT 青 / 2=SPEED 橙)。

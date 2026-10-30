@@ -165,93 +165,119 @@ void EngineVoice::render(float* out, int frames, float outRate, const EngineSoun
 }
 
 // ============================================================================
-// タイヤ (ドリフト) 音
+// タイヤ (ドリフト) 音 ― 合成
+//
+// 実際のスキール音は、タイヤのゴムが路面に「張り付く→滑る」を毎秒数十回
+// 繰り返すことで出る、揺らぎの大きい倍音の多い音。ここではそれを 3 層で作る:
+//   1. 鳴き: 基本周波数 (約 0.5〜1kHz) と倍音。音程はゆっくりランダムに揺れ、
+//      張り付き/滑りの繰り返し (20〜50Hz) で音量が細かく断続する。
+//   2. 擦れ: ノイズを鳴きの 2.3 倍あたりで帯域通過させた「シャー」という成分。
+//   3. ザラつき: 低域だけ残したノイズ (路面を擦るゴロゴロ)。
+// 深く滑るほど低く太く (断続は減る)、浅いと高めでチリチリと断続する。
+// 速いほど高く大きい。滑り始めは鋭く、長く滑るとタイヤが熱を持ったように
+// 低めで擦れの多い音になる。
 // ============================================================================
 namespace {
-constexpr float kTireAttackTau = 0.045f;   // 滑り始めの立ち上がり
-constexpr float kTireReleaseTau = 0.16f;   // グリップ回復時の消え方
-constexpr float kTireSpeedTau = 0.10f;
-constexpr float kTireBiteSec = 0.35f;      // 出だしの「キュッ」が続く目安
+constexpr float kTireAttackTau = 0.06f;    // 滑り始めの立ち上がり
+constexpr float kTireReleaseTau = 0.22f;   // グリップ回復時の消え方
+constexpr float kTireSpeedTau = 0.12f;
+constexpr float kTireBiteSec = 0.4f;       // 出だしの「キュッ」が続く目安
 constexpr float kTireHeatStartSec = 1.5f;  // 長く滑ると音色が変わり始める秒数
 constexpr float kTireHeatRangeSec = 4.0f;  // 変化しきるまでの秒数
-constexpr float kTireLfoHz = 0.17f;        // 2 つの読み位置を行き来する速さ
-constexpr float kTireGain = 0.85f;
+constexpr float kTireBaseHz = 560.0f;      // 低速での鳴きの高さ
+constexpr float kTireSpeedHz = 420.0f;     // 速度で上がる分
+constexpr float kTireGain = 0.30f;         // 全体の音量 (エンジン音より一歩引いた大きさ)
+constexpr int kTireBlock = 16;             // 係数をまとめて計算するサンプル数
 }  // namespace
 
+float BandPass::process(float input, float freq, float q, float rate) {
+    // Chamberlin 型の状態変数フィルタ。f は 32 サンプルごとに変えても滑らか。
+    const float f = 2.0f * std::sin(3.14159265f * std::min(freq, rate * 0.2f) / rate);
+    low += f * band;
+    const float high = input - low - q * band;
+    band += f * high;
+    return band;
+}
+
 void TireVoice::render(float* out, int frames, float outRate, const TireSound& target) {
-    if (loop_.empty()) {
-        return;
-    }
     const float depthTarget = clamp01(target.depth);
     if (depthTarget <= 0.0f && env_ < 1e-5f) {
         env_ = 0.0f;
         depthSm_ = 0.0f;
-        return;  // 無音: 計算を省く (読み位置もそのまま保持)
+        return;  // 無音: 計算を省く
     }
 
-    // --- 継続時間から決まる性格 (フレーム内では一定とみなす) ---------------
-    // bite: 滑り始めほど 1。出だしは鋭く高めに鳴く。
-    // heat: 長く滑るほど 1。タイヤが熱を持ち、低めでザラついた音になる。
+    // --- 継続時間から決まる性格 (この呼び出しの間は一定とみなす) ----------
     const float bite = std::exp(-target.duration / kTireBiteSec);
     const float heat = clamp01((target.duration - kTireHeatStartSec) / kTireHeatRangeSec);
 
     const float kAttack = smoothingCoef(kTireAttackTau, outRate);
     const float kRelease = smoothingCoef(kTireReleaseTau, outRate);
     const float kSpeed = smoothingCoef(kTireSpeedTau, outRate);
-    const float kJitter = smoothingCoef(0.06f, outRate);
-    const float squealCoef = lowpassCoef(9000.0f - 4500.0f * heat, outRate);
-    const float noiseCoef = lowpassCoef(900.0f, outRate);
-    const float rateScale = float(loop_.rate) / outRate;
-    const int n = loop_.frames();
-    const double half = double(n) * 0.5;
+    const float kWobble = smoothingCoef(0.05f, outRate);
+    const float kChop = smoothingCoef(0.15f, outRate);
+    const float toneCoef = lowpassCoef(4500.0f - 1500.0f * heat, outRate);
+    const float rumbleCoef = lowpassCoef(300.0f, outRate);
 
+    float freq = kTireBaseHz;
+    float levelTarget = 0.0f;
+    float chopDepth = 0.3f;
+    float speedN = 0.0f;
     for (int i = 0; i < frames; ++i) {
         // --- パラメータ --------------------------------------------------
         depthSm_ = follow(depthSm_, depthTarget, kAttack, kRelease);
         speedSm_ += (target.speed - speedSm_) * kSpeed;
-        const float speedN = clamp01((speedSm_ - 3.0f) / 22.0f);  // 約 11〜90 km/h で 0→1
-        const float speedGain = std::sqrt(speedN);
 
-        // ゆらぎ: 約 70ms ごとに新しい目標を選び、滑らかに追う。
-        // 実際のスキール音は路面の細かな変化で音程と音量が揺れている。
-        if (--jitterCountdown_ <= 0) {
-            jitterCountdown_ = int(outRate * (0.05f + 0.04f * (rng_.bipolar() * 0.5f + 0.5f)));
-            jitterPitchTarget_ = 0.018f * rng_.bipolar();
-            jitterGainTarget_ = 0.12f * rng_.bipolar();
+        // ランダムな音程の揺らぎ: 40〜90ms ごとに新しい目標を選び、滑らかに追う。
+        if (--wobbleCountdown_ <= 0) {
+            wobbleCountdown_ = int(outRate * (0.04f + 0.05f * (rng_.bipolar() * 0.5f + 0.5f)));
+            wobbleTarget_ = 0.025f * rng_.bipolar();
+            chopRateTarget_ = 35.0f + 13.0f * rng_.bipolar();  // 22〜48Hz
         }
-        jitterPitch_ += (jitterPitchTarget_ - jitterPitch_) * kJitter;
-        jitterGain_ += (jitterGainTarget_ - jitterGain_) * kJitter;
+        wobble_ += (wobbleTarget_ - wobble_) * kWobble;
+        chopRate_ += (chopRateTarget_ - chopRate_) * kChop;
 
-        // 音量: 深さに対してやや早めに立ち上がるカーブ。出だしは少し強い。
-        const float levelTarget = std::pow(depthSm_, 0.8f) * speedGain * (1.0f + 0.3f * bite);
+        // 重い計算 (べき乗・フィルタ係数) は kTireBlock サンプルに 1 回。
+        if (i % kTireBlock == 0) {
+            speedN = clamp01((speedSm_ - 4.0f) / 24.0f);  // 約 14〜100 km/h で 0→1
+            // 音量: 浅い滑りでは小さく、深くなるほど急に大きくなる (常に鳴りっぱなしにしない)。
+            levelTarget = std::pow(depthSm_, 1.4f) * std::sqrt(speedN) * (1.0f + 0.25f * bite);
+            // 鳴きの高さ: 速いほど高い / 深いほど低い / 出だしは高い / 熱で下がる。
+            freq = (kTireBaseHz + kTireSpeedHz * speedN) * (1.0f - 0.10f * depthSm_) *
+                   (1.0f + 0.07f * bite) * (1.0f - 0.07f * heat);
+            // 断続の深さ: 浅い滑りほどチリチリと途切れる。
+            chopDepth = 0.25f + 0.35f * (1.0f - depthSm_);
+        }
         env_ = follow(env_, levelTarget, kAttack, kRelease);
 
-        // 音程: 速いほど高い / 深いほど低い / 出だしは高い / 熱で下がる。
-        const float pitch = (0.86f + 0.24f * speedN) * (1.0f - 0.08f * depthSm_) * (1.0f + 0.08f * bite) *
-                            (1.0f - 0.06f * heat) * (1.0f + jitterPitch_);
+        // --- 1. 鳴き (倍音) ------------------------------------------------
+        vibratoPhase_ += 7.3f / outRate;
+        if (vibratoPhase_ >= 1.0f) vibratoPhase_ -= 1.0f;
+        const float pitch = freq * (1.0f + wobble_ + 0.006f * std::sin(vibratoPhase_ * kTwoPi));
+        phase_ += pitch / outRate;
+        if (phase_ >= 1.0f) phase_ -= std::floor(phase_);
+        const float ph = phase_ * kTwoPi;
+        const float squeal = std::sin(ph) + 0.42f * std::sin(2.0f * ph + 0.7f) +
+                             0.18f * std::sin(3.0f * ph + 1.9f) + 0.08f * std::sin(5.0f * ph);
+        chopPhase_ += chopRate_ / outRate;
+        if (chopPhase_ >= 1.0f) chopPhase_ -= 1.0f;
+        const float chop = 1.0f - chopDepth * (0.5f + 0.5f * std::sin(chopPhase_ * kTwoPi));
 
-        // --- スキール音: 半周ずらした 2 つの読み位置を等パワーで行き来する ---
-        // 1 つのループだけだと数秒ごとの繰り返しが耳につくため。
-        float aL, aR, bL, bR;
-        readLoop(loop_, pos_, aL, aR);
-        readLoop(loop_, advance(pos_, half, n), bL, bR);
-        pos_ = advance(pos_, double(pitch * rateScale), n);
-        lfoPhase_ += kTireLfoHz / outRate;
-        if (lfoPhase_ >= 1.0f) lfoPhase_ -= 1.0f;
-        const float mix = 0.5f + 0.5f * std::sin(lfoPhase_ * kTwoPi);  // 0..1
-        const float gA = std::cos(mix * 1.5707963f);
-        const float gB = std::sin(mix * 1.5707963f);
-        squealLp_[0] += (aL * gA + bL * gB - squealLp_[0]) * squealCoef;
-        squealLp_[1] += (aR * gA + bR * gB - squealLp_[1]) * squealCoef;
+        // --- 2. 擦れ (帯域ノイズ、左右で別のノイズ) / 3. ザラつき (低域ノイズ) ---
+        const float hissL = hiss_[0].process(rng_.bipolar(), pitch * 2.3f, 0.35f, outRate);
+        const float hissR = hiss_[1].process(rng_.bipolar(), pitch * 2.3f, 0.35f, outRate);
+        rumble1_ += (rng_.bipolar() - rumble1_) * rumbleCoef;
+        rumble2_ += (rumble1_ - rumble2_) * rumbleCoef;
+        const float rumble = rumble2_ * 1.6f * depthSm_ * speedN;
+        const float hissGain = 0.45f + 0.35f * heat;
 
-        // --- 路面ノイズ: タイヤが路面を擦る「ザー」という低めの成分 -----------
-        noiseLp1_ += (rng_.bipolar() - noiseLp1_) * noiseCoef;
-        noiseLp2_ += (noiseLp1_ - noiseLp2_) * noiseCoef;
-        const float scrub = noiseLp2_ * 2.2f * depthSm_ * speedN * (0.6f + 0.4f * heat);
+        // 鳴きの角を少し丸める (熱で暗くなる)。
+        tone_[0] += (squeal * chop * 0.55f - tone_[0]) * toneCoef;
+        tone_[1] = tone_[0];
 
-        const float volume = env_ * kTireGain * (1.0f + jitterGain_);
-        out[i * 2] += (squealLp_[0] + scrub) * volume;
-        out[i * 2 + 1] += (squealLp_[1] + scrub) * volume;
+        const float volume = env_ * kTireGain;
+        out[i * 2] += (tone_[0] + hissL * hissGain + rumble) * volume;
+        out[i * 2 + 1] += (tone_[1] + hissR * hissGain + rumble) * volume;
     }
 }
 

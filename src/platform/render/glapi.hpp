@@ -41,7 +41,9 @@
     X(PFNGLLINKPROGRAMPROC, glLinkProgram)                            \
     X(PFNGLSHADERSOURCEPROC, glShaderSource)                          \
     X(PFNGLUNIFORM1FPROC, glUniform1f)                                \
+    X(PFNGLUNIFORM1IPROC, glUniform1i)                                \
     X(PFNGLUNIFORM3FPROC, glUniform3f)                                \
+    X(PFNGLUNIFORM3FVPROC, glUniform3fv)                              \
     X(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv)                  \
     X(PFNGLUSEPROGRAMPROC, glUseProgram)                              \
     X(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer)
@@ -71,7 +73,9 @@ RACEGAME_GL_FUNCTIONS(RACEGAME_GL_DECLARE)
 #define glLinkProgram racegame_glLinkProgram
 #define glShaderSource racegame_glShaderSource
 #define glUniform1f racegame_glUniform1f
+#define glUniform1i racegame_glUniform1i
 #define glUniform3f racegame_glUniform3f
+#define glUniform3fv racegame_glUniform3fv
 #define glUniformMatrix4fv racegame_glUniformMatrix4fv
 #define glUseProgram racegame_glUseProgram
 #define glVertexAttribPointer racegame_glVertexAttribPointer

@@ -13,8 +13,11 @@
 //   - エンジン音は録音ループを「回転数に比例した速さ」で読み出して
 //     音程を連続的に変える (段階切替なし)。アクセルで音色の明るさと
 //     音量、回転数に同期した燃焼音 (倍音) を重ねて厚みを出す。
-//   - タイヤ音は継ぎ目処理済みのループを 2 つの読み位置で重ねて鳴らし、
-//     繰り返し感を消す。滑りの深さ・継続時間・速度で音量/音程/音色が変わる。
+//   - タイヤ音 (ドリフトのスキール音) は素材を使わず合成する。タイヤが路面で
+//     「張り付く/滑る」を細かく繰り返して鳴る音を、揺らぎのある倍音 (鳴き) +
+//     帯域を絞ったノイズ (擦れ) + 低いノイズ (路面のザラつき) で作る。
+//     ループの継ぎ目が無いので、何秒滑っても同じ音の繰り返しにならない。
+//     滑りの深さ・継続時間・速度で音量/音程/音色が変わる。
 //
 // スレッド: set* / playCue はゲーム側スレッド、render は音声スレッドから
 //   呼ばれてよい (受け渡しは atomic)。ブラウザ版は同じスレッドで動く。
@@ -76,28 +79,34 @@ private:
     bool primed_ = false;   // 最初の 1 回は平滑化せず目標値から始める
 };
 
+// 2 次の状態変数フィルタ (帯域通過)。ノイズから特定の高さの成分だけを取り出す。
+struct BandPass {
+    float low = 0.0f, band = 0.0f;
+    // input を通し、中心 freq (Hz)・鋭さ q (大きいほど狭い) の帯域成分を返す。
+    float process(float input, float freq, float q, float rate);
+};
+
 // ----------------------------------------------------------------------------
-// タイヤ (ドリフト) 音のボイス
+// タイヤ (ドリフト) 音のボイス。素材を使わない合成音。
 // ----------------------------------------------------------------------------
 class TireVoice {
 public:
-    void setLoop(Pcm loop) { loop_ = std::move(loop); }
-    bool ready() const { return !loop_.empty(); }
     void render(float* out, int frames, float outRate, const TireSound& target);
     float level() const { return env_; }
 
 private:
-    Pcm loop_;               // 継ぎ目処理済みのスキール音ループ
-    double pos_ = 0.0;       // 読み位置 (2 つ目の読み位置は半周ずらして求める)
-    float depthSm_ = 0.0f;   // 平滑化した滑りの深さ
-    float speedSm_ = 0.0f;   // 平滑化した車速 (m/s)
-    float env_ = 0.0f;       // 音量エンベロープ
-    float lfoPhase_ = 0.0f;  // 2 つの読み位置を行き来させる LFO の位相
-    float jitterPitch_ = 0.0f, jitterGain_ = 0.0f;              // ゆらぎ (現在値)
-    float jitterPitchTarget_ = 0.0f, jitterGainTarget_ = 0.0f;  // ゆらぎ (目標値)
-    int jitterCountdown_ = 0;                                    // 次のゆらぎまでのサンプル数
-    float squealLp_[2] = {0, 0};  // スキール音の音色フィルタ (L/R)
-    float noiseLp1_ = 0.0f, noiseLp2_ = 0.0f;  // 路面ノイズ用フィルタ
+    float depthSm_ = 0.0f;    // 平滑化した滑りの深さ
+    float speedSm_ = 0.0f;    // 平滑化した車速 (m/s)
+    float env_ = 0.0f;        // 音量エンベロープ
+    float phase_ = 0.0f;      // 鳴き (倍音) の位相 0..1
+    float chopPhase_ = 0.0f;  // 張り付き/滑りの繰り返し (細かい断続) の位相 0..1
+    float wobble_ = 0.0f, wobbleTarget_ = 0.0f;  // 音程の揺らぎ (ランダム、ゆっくり)
+    float chopRate_ = 30.0f, chopRateTarget_ = 30.0f;  // 断続の速さ (Hz)
+    int wobbleCountdown_ = 0;                     // 次の揺らぎまでのサンプル数
+    float vibratoPhase_ = 0.0f;                   // 細かいビブラートの位相
+    BandPass hiss_[2];        // 擦れ (L/R で別のノイズを通して広がりを出す)
+    float rumble1_ = 0.0f, rumble2_ = 0.0f;  // 路面のザラつき (低域ノイズ)
+    float tone_[2] = {0, 0};  // 鳴きの角を丸めるフィルタ (L/R)
     Random rng_{0x9E3779B9u};
 };
 
@@ -130,11 +139,10 @@ class SoundMixer {
 public:
     // --- 準備 (音声デバイスを動かす前に呼ぶ) ---------------------------------
     void setOutputRate(int rate) { outRate_ = float(rate > 0 ? rate : 48000); }
-    // ループ素材を渡す (makeSeamlessLoop 済みのもの)。空なら該当音は無音。
+    // エンジン音のループ素材を渡す (makeSeamlessLoop 済みのもの)。空ならエンジンは無音。
+    // タイヤ音は合成なので素材は要らない。
     void setEngineLoop(Pcm loop) { engine_.setLoop(std::move(loop)); }
-    void setTireLoop(Pcm loop) { tire_.setLoop(std::move(loop)); }
     bool hasEngine() const { return engine_.ready(); }
-    bool hasTire() const { return tire_.ready(); }
 
     // --- ゲーム側から (毎フレーム呼んでよい) --------------------------------
     void setEngine(const EngineSound& state);

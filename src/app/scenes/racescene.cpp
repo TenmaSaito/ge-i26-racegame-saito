@@ -1,7 +1,8 @@
 // ============================================================================
 // racescene.cpp ― レースシーン (RaceScene) の実装
 // 役割: 入力の意図を受けて状態を変え、物理を固定ステップで進め、
-//       補間ポーズで描く。kRaceLaps 周を完了したらリザルトへ遷移する。
+//       補間ポーズで描く。指定の周回数を完了したらリザルトへ遷移する
+//       (周回数が無制限のフリー走行ではゴールしない)。
 //
 // 1 フレームの流れ (frame):
 //   handleUi → readDriveInput → stepPhysics → updateCamera
@@ -80,8 +81,8 @@ void RaceScene::frame(double dtSeconds) {
     updateSound(float(elapsed), rawInput, input, countdown);
     updateRumble(float(elapsed), countdown);
 
-    // --- ゴール判定: 規定周回を完了したらリザルトへ -------------------------
-    if (app.race().completed() >= kRaceLaps) {
+    // --- ゴール判定: 指定の周回を完了したらリザルトへ (0 = 無制限ならしない) ---
+    if (app.laps() > 0 && app.race().completed() >= app.laps()) {
         app.requestScene(SceneId::Result);
     }
 
@@ -506,6 +507,7 @@ void RaceScene::updateRumble(float elapsed, const CountdownEvents& countdown) {
 
 void RaceScene::draw() {
     Game& app = game_;
+    app.setPlayerViewPose({viewX_, viewY_, viewZ_}, viewYaw_);  // ヘッドライトを補間ポーズに合わせる
     app.beginWorldDraw();
     app.drawWorld({viewX_, viewY_, viewZ_}, viewYaw_);
     app.drawRivals(true);

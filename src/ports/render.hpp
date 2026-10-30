@@ -22,6 +22,25 @@ struct GpuMesh {
     int indexCount = 0;
 };
 
+// ヘッドライト 1 灯分 (スポットライト)。
+struct SpotLight {
+    Vec3 pos;    // 光源の位置 (ワールド)
+    Vec3 dir;    // 照らす向き (正規化済み)
+    Vec3 color;  // 色と強さ (1 前後)
+};
+
+// ワールドの照明の設定。昼はすべて既定値のまま。
+// 夜は太陽の代わりに月明かりと車のヘッドライトで照らし、色が 1 を超える
+// 頂点 (テールランプ・ヘッドランプ) は自ら光るものとして明るく描く。
+struct SceneLighting {
+    static constexpr int kMaxLights = 6;
+    float night = 0.0f;     // 0 = 昼、1 = 夜
+    float exposure = 1.0f;  // 全体の明るさの倍率 (夜のバックミラーで上げる)
+    Vec3 ghostGlow{0, 0, 0};  // 半透明描画 (ゴースト) に足す発光色 (夜に見やすくする)
+    int lightCount = 0;
+    SpotLight lights[kMaxLights];
+};
+
 // 描画ポート。ゲーム側 (game / hud / effects) はこの型だけを見て描く。
 struct IRenderer {
     virtual ~IRenderer() = default;
@@ -37,6 +56,8 @@ struct IRenderer {
     // yFromBottom は GL の慣例で下端からの位置。終わったら clearViewport。
     virtual void setViewport(int x, int yFromBottom, int w, int h) = 0;
     virtual void clearViewport() = 0;
+    // 照明を設定する (次の drawSky / beginWorld から効く)。
+    virtual void setLighting(const SceneLighting& lighting) = 0;
     virtual void drawSky() = 0;
     virtual void beginWorld(const Mat4& viewProj, Vec3 cameraPos) = 0;
     virtual void draw(const GpuMesh& mesh, const Mat4& model) = 0;

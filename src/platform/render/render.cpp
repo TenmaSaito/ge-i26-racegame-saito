@@ -35,22 +35,57 @@ void main() {
 }
 )GLSL";
 
+// ワールドのフラグメントシェーダ。
+//   昼: 太陽の平行光 + 遠くほど空色に霞む。
+//   夜: 青みがかった弱い月明かり + 車のヘッドライト (スポットライト) で照らし、
+//       霞は暗い紺。色が 1 を超える頂点 (テールランプ等) は自ら光る扱い。
+// uNight が 0 のときは昼の計算結果と完全に同じになる。
 const char* kWorldFs = R"GLSL(
+#define MAX_LIGHTS 6
 in vec3 vNormal;
 in vec3 vColor;
 in vec3 vWorld;
 uniform vec3 uCamPos;
 uniform float uAlpha;
+uniform float uNight;
+uniform float uExposure;
+uniform vec3 uGlow;
+uniform int uLightCount;
+uniform vec3 uLightPos[MAX_LIGHTS];
+uniform vec3 uLightDir[MAX_LIGHTS];
+uniform vec3 uLightColor[MAX_LIGHTS];
 out vec4 fragColor;
 void main() {
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
+    // 昼の太陽と夜の月 (青白く弱い)。
     vec3 sun = normalize(vec3(0.35, 0.86, 0.28));
-    float light = 0.47 + 0.53 * max(dot(n, sun), 0.0);
+    float dayLight = 0.47 + 0.53 * max(dot(n, sun), 0.0);
+    vec3 moon = normalize(vec3(-0.3, 0.8, -0.5));
+    vec3 nightLight = vec3(0.10, 0.12, 0.17) + vec3(0.10, 0.13, 0.20) * max(dot(n, moon), 0.0);
+    vec3 light = mix(vec3(dayLight), nightLight, uNight);
+    // ヘッドライト: 円錐の中だけ、距離で弱まる。路面のような斜めの面も
+    // 見えるよう、向きによる明暗は弱めにしている。
+    for (int i = 0; i < MAX_LIGHTS; ++i) {
+        if (i >= uLightCount) break;
+        vec3 toLight = uLightPos[i] - vWorld;
+        float d = length(toLight);
+        vec3 l = toLight / max(d, 0.001);
+        float cone = smoothstep(0.82, 0.96, dot(-l, uLightDir[i]));
+        float fall = clamp(1.0 - d / 95.0, 0.0, 1.0);
+        float facing = 0.35 + 0.65 * max(dot(n, l), 0.0);
+        light += uLightColor[i] * (cone * fall * fall * facing * uNight);
+    }
     vec3 color = vColor * light;
+    // 自ら光る部品 (色が 1 を超える頂点) は夜は照明に関係なく明るい。
+    float emissive = step(1.001, max(vColor.r, max(vColor.g, vColor.b))) * uNight;
+    color = mix(color, min(vColor, vec3(1.8)), emissive);
+    color = color * uExposure + uGlow;
     float dist = distance(vWorld, uCamPos);
-    float fog = clamp((dist - 90.0) / 1500.0, 0.0, 1.0);
-    vec3 haze = vec3(0.62, 0.74, 0.84);
+    float dayFog = clamp((dist - 90.0) / 1500.0, 0.0, 1.0);
+    float nightFog = clamp((dist - 40.0) / 700.0, 0.0, 1.0);
+    float fog = mix(dayFog, nightFog, uNight) * (1.0 - emissive * 0.7);
+    vec3 haze = mix(vec3(0.62, 0.74, 0.84), vec3(0.025, 0.035, 0.07), uNight);
     fragColor = vec4(mix(color, haze, fog), uAlpha);
 }
 )GLSL";
@@ -66,11 +101,12 @@ void main() {
 
 const char* kSkyFs = R"GLSL(
 in float vY;
+uniform float uNight;
 out vec4 fragColor;
 void main() {
     float t = clamp(vY * 0.5 + 0.5, 0.0, 1.0);
-    vec3 horizon = vec3(0.62, 0.74, 0.84);
-    vec3 zenith = vec3(0.28, 0.48, 0.78);
+    vec3 horizon = mix(vec3(0.62, 0.74, 0.84), vec3(0.025, 0.035, 0.07), uNight);
+    vec3 zenith = mix(vec3(0.28, 0.48, 0.78), vec3(0.005, 0.01, 0.03), uNight);
     fragColor = vec4(mix(horizon, zenith, smoothstep(0.0, 1.0, t)), 1.0);
 }
 )GLSL";
@@ -197,8 +233,11 @@ struct GlRenderer final : IRenderer {
     int width() const override { return w; }
     int height() const override { return h; }
     void clearFrame() override;
+    void setLighting(const SceneLighting& lighting) override { light = lighting; }
     void drawSky() override;
     void beginWorld(const Mat4& viewProj, Vec3 cameraPos) override;
+    // 照明の uniform をワールドのシェーダへ送る。
+    void applyLighting();
     void draw(const GpuMesh& mesh, const Mat4& model) override;
     void drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) override;
     void drawDynamic(const CpuMesh& mesh) override;
@@ -224,6 +263,11 @@ struct GlRenderer final : IRenderer {
     int uModel = -1;
     int uCamPos = -1;
     int uOrtho = -1;
+    // 照明 (夜・ヘッドライト) の uniform。
+    SceneLighting light;
+    int uNight = -1, uExposure = -1, uGlow = -1, uLightCount = -1;
+    int uLightPos = -1, uLightDir = -1, uLightColor = -1;
+    int uSkyNight = -1;
     std::vector<float> hudVerts;
     std::vector<unsigned> hudIndices;
 };
@@ -244,6 +288,14 @@ bool GlRenderer::init() {
     uModel = glGetUniformLocation(worldProgram, "uModel");
     uCamPos = glGetUniformLocation(worldProgram, "uCamPos");
     uOrtho = glGetUniformLocation(hudProgram, "uOrtho");
+    uNight = glGetUniformLocation(worldProgram, "uNight");
+    uExposure = glGetUniformLocation(worldProgram, "uExposure");
+    uGlow = glGetUniformLocation(worldProgram, "uGlow");
+    uLightCount = glGetUniformLocation(worldProgram, "uLightCount");
+    uLightPos = glGetUniformLocation(worldProgram, "uLightPos");
+    uLightDir = glGetUniformLocation(worldProgram, "uLightDir");
+    uLightColor = glGetUniformLocation(worldProgram, "uLightColor");
+    uSkyNight = glGetUniformLocation(skyProgram, "uNight");
 
     glGenVertexArrays(1, &hudVao);
     glGenBuffers(1, &hudVbo);
@@ -266,7 +318,9 @@ bool GlRenderer::init() {
 }
 
 void GlRenderer::clearFrame() {
-    glClearColor(0.62f, 0.74f, 0.84f, 1.0f);
+    // 消去色は空の地平線の色 (昼は空色、夜は暗い紺)。
+    const float n = light.night;
+    glClearColor(0.62f + (0.025f - 0.62f) * n, 0.74f + (0.035f - 0.74f) * n, 0.84f + (0.07f - 0.84f) * n, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
@@ -297,6 +351,7 @@ void GlRenderer::drawSky() {
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glUseProgram(skyProgram);
+    glUniform1f(uSkyNight, light.night);
     glBindVertexArray(dummyVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glDepthMask(GL_TRUE);
@@ -310,6 +365,30 @@ void GlRenderer::beginWorld(const Mat4& viewProj, Vec3 cameraPos) {
     glUniformMatrix4fv(uViewProj, 1, GL_FALSE, viewProj.m);
     glUniform3f(uCamPos, cameraPos.x, cameraPos.y, cameraPos.z);
     glUniform1f(uAlphaLoc, 1.0f);  // 通常描画は不透明 (ゴースト描画が戻し忘れても安全なよう毎回)
+    applyLighting();
+}
+
+void GlRenderer::applyLighting() {
+    glUniform1f(uNight, light.night);
+    glUniform1f(uExposure, light.exposure);
+    glUniform3f(uGlow, 0.0f, 0.0f, 0.0f);  // 発光の上乗せは半透明描画のときだけ
+    const int count = light.lightCount < 0 ? 0
+                      : (light.lightCount > SceneLighting::kMaxLights ? SceneLighting::kMaxLights : light.lightCount);
+    glUniform1i(uLightCount, count);
+    float pos[SceneLighting::kMaxLights * 3] = {};
+    float dir[SceneLighting::kMaxLights * 3] = {};
+    float col[SceneLighting::kMaxLights * 3] = {};
+    for (int i = 0; i < count; ++i) {
+        const SpotLight& l = light.lights[i];
+        pos[i * 3] = l.pos.x; pos[i * 3 + 1] = l.pos.y; pos[i * 3 + 2] = l.pos.z;
+        dir[i * 3] = l.dir.x; dir[i * 3 + 1] = l.dir.y; dir[i * 3 + 2] = l.dir.z;
+        col[i * 3] = l.color.x; col[i * 3 + 1] = l.color.y; col[i * 3 + 2] = l.color.z;
+    }
+    if (count > 0) {
+        glUniform3fv(uLightPos, count, pos);
+        glUniform3fv(uLightDir, count, dir);
+        glUniform3fv(uLightColor, count, col);
+    }
 }
 
 // 半透明描画 (ゴースト用)。ブレンドを有効化し、深度書き込みを止めて
@@ -319,7 +398,9 @@ void GlRenderer::drawAlpha(const GpuMesh& mesh, const Mat4& model, float alpha) 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
     glUniform1f(uAlphaLoc, alpha);
+    glUniform3f(uGlow, light.ghostGlow.x, light.ghostGlow.y, light.ghostGlow.z);  // 夜はゴーストを発光させる
     draw(mesh, model);
+    glUniform3f(uGlow, 0.0f, 0.0f, 0.0f);
     glUniform1f(uAlphaLoc, 1.0f);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);

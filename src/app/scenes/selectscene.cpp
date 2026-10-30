@@ -2,7 +2,8 @@
 // selectscene.cpp ― セレクトシーン (SelectScene) の実装
 // 操作: ↑↓ (またはパッド上下) で項目、←→ で値を変える。1/2/3 でも車種。
 //       決定で設定を反映してレースへ、Esc でタイトルへ戻る。
-//   項目: STAGE (コース) / CAR (車種) / RIVALS (SOLO・1〜3 台) / AI LEVEL
+//   項目: STAGE (コース) / TIME (昼・夜) / CAR (車種) / LAPS (周回数・無制限) /
+//         RIVALS (SOLO・1〜3 台) / AI LEVEL
 // ============================================================================
 
 #include "selectscene.hpp"
@@ -25,6 +26,10 @@ void SelectScene::enter() {
         }
     }
     menu_.spec = game_.carSpec();
+    menu_.night = game_.night();
+    for (int i = 0; i < kLapOptionCount; ++i) {
+        if (kLapOptions[i] == game_.laps()) menu_.lapIndex = i;
+    }
     menu_.rivals = game_.rivalCount();
     menu_.level = int(game_.aiLevel());
     game_.requestSharedRecords();  // 対戦相手のモデルにする共有記録を先に取りに行く
@@ -33,10 +38,12 @@ void SelectScene::enter() {
 void SelectScene::adjust(int row, int dir) {
     auto wrap = [](int v, int n) { return (v % n + n) % n; };
     switch (row) {
-    case 0: menu_.course = wrap(menu_.course + dir, kCourseCount); break;
-    case 1: menu_.spec = wrap(menu_.spec + dir, kCarSpecCount); break;
-    case 2: menu_.rivals = wrap(menu_.rivals + dir, Game::kMaxRivals + 1); break;
-    case 3: menu_.level = wrap(menu_.level + dir, kAiLevelCount); break;
+    case SelectMenu::Stage: menu_.course = wrap(menu_.course + dir, kCourseCount); break;
+    case SelectMenu::Time: menu_.night = !menu_.night; break;
+    case SelectMenu::Car: menu_.spec = wrap(menu_.spec + dir, kCarSpecCount); break;
+    case SelectMenu::Laps: menu_.lapIndex = wrap(menu_.lapIndex + dir, kLapOptionCount); break;
+    case SelectMenu::Rivals: menu_.rivals = wrap(menu_.rivals + dir, Game::kMaxRivals + 1); break;
+    case SelectMenu::Level: menu_.level = wrap(menu_.level + dir, kAiLevelCount); break;
     default: break;
     }
 }
@@ -67,6 +74,8 @@ void SelectScene::frame(double dt) {
         // (レース開始時の resetRace が、この設定で対戦相手を並べる)
         game_.setRivalCount(menu_.rivals);
         game_.setAiLevel(AiLevel(menu_.level));
+        game_.setNight(menu_.night);
+        game_.setLaps(menu_.laps());
         if (game_.carSpec() != menu_.spec) {
             game_.applyCarSpec(menu_.spec);
         }

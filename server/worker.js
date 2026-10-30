@@ -2,7 +2,7 @@
 // worker.js ― 走行記録の共有サーバー (Cloudflare Workers + KV、無料枠で動く)
 //
 // API:
-//   GET  /records?course=suzuka   そのコースの共有記録 (速い順、最大 30 件) を JSON で返す
+//   GET  /records?course=suzuka   そのコースの共有記録 (ベストラップの速い順、最大 30 件) を JSON で返す
 //   POST /records                  記録を 1 件登録する (JSON。形式は validateRecord を参照)
 //   GET  /health                   動作確認用
 //
@@ -26,7 +26,7 @@ const COURSES = {
   flow: 3646,
   coast: 4010,
 };
-const LAPS = 3;                 // 規定周回数 (ゲームの kRaceLaps と同じ)
+const MAX_LAPS = 20;            // 周回数の上限 (ゲームで選べるのは 1〜10 周)
 const MAX_SPEED = 82;           // 車の最高速 (m/s)
 const PROFILE_BINS = 100;       // 区間速度の数 (ゲームの kProfileBins と同じ)
 const KEEP_PER_COURSE = 30;     // コースごとに残す件数
@@ -54,11 +54,13 @@ export function validateRecord(body) {
   const level = Number(body.level);
   if (!Number.isInteger(car) || car < 0 || car > 2) throw 'bad car';
   if (!Number.isInteger(level) || level < -1 || level > 2) throw 'bad level';
+  const laps = body.laps === undefined ? 3 : Number(body.laps);  // 古いゲームは周回数を送らない (3 周)
+  if (!Number.isInteger(laps) || laps < 1 || laps > MAX_LAPS) throw 'bad laps';
   const total = Number(body.total);
   const bestLap = Number(body.bestLap);
   const minLap = COURSES[course] / MAX_SPEED;
   if (!Number.isFinite(bestLap) || bestLap < minLap || bestLap > 1800) throw 'bad bestLap';
-  if (!Number.isFinite(total) || total < bestLap * LAPS * 0.98 || total > 7200) throw 'bad total';
+  if (!Number.isFinite(total) || total < bestLap * laps * 0.98 || total > 36000) throw 'bad total';
   const profile = body.profile;
   if (!Array.isArray(profile) || profile.length !== PROFILE_BINS) throw 'bad profile';
   const speeds = profile.map(Number);
@@ -72,6 +74,7 @@ export function validateRecord(body) {
     course,
     car,
     level,
+    laps,
     total: Math.round(total * 1000) / 1000,
     bestLap: Math.round(bestLap * 1000) / 1000,
     profile: speeds.map((v) => Math.round(v * 10) / 10),
@@ -163,10 +166,11 @@ export default {
       }
       await env.RECORDS.put(key, String(now), { expirationTtl: 120 });
 
-      // コースの一覧へ加える。同じ名前の人は速い方の記録だけ残す。
-      const list = (await loadCourse(env, record.course)).filter((r) => r.name !== record.name || r.total < record.total);
+      // コースの一覧へ加える。同じ名前の人はベストラップの速い方だけ残す
+      // (周回数が違っても比べられるよう、合計ではなくベストラップで比べる)。
+      const list = (await loadCourse(env, record.course)).filter((r) => r.name !== record.name || r.bestLap < record.bestLap);
       if (!list.some((r) => r.name === record.name)) list.push(record);
-      list.sort((a, b) => a.total - b.total);
+      list.sort((a, b) => a.bestLap - b.bestLap);
       await env.RECORDS.put(`course:${record.course}`, JSON.stringify(list.slice(0, KEEP_PER_COURSE)));
       const rank = list.findIndex((r) => r.name === record.name);
       return json({ ok: true, rank: rank + 1 }, 201, headers);
