@@ -13,7 +13,7 @@
 #include "enginesim.hpp"  // EngineSim (タコメーター)
 #include "game.hpp"
 #include "input.hpp"  // input::padStatus (パッド認識状態)
-#include "scene.hpp"   // kRaceLaps
+#include "scene.hpp"   // kCourses / SelectMenu
 #include "scenery.hpp"  // countScenery (オブジェクト内訳)
 #include "render.hpp"
 #include "tuning.hpp"
@@ -449,14 +449,20 @@ void Hud::drawStandings(Game& app) {
     for (size_t i = 0; i < list.size(); ++i) {
         if (list[i].player) position = int(i) + 1;
     }
-    // 左の列 (速度・ラップ表示の下) に置く。右上はデバッグ表示とカメラ名の場所。
+    // 置き場所: 左の列 (速度・ラップ表示の下)。右上はデバッグ表示とカメラ名の場所。
+    // 画面が低くて左下のミニマップ (下から 218px) とぶつかるときは、ミニマップの右隣に置く。
+    const float H = float(hud.height());
+    const float blockH = 40.0f + 24.0f * float(list.size());
+    const bool besideMap = 198.0f + blockH > H - 226.0f;
+    const float titleX = besideMap ? 230.0f : 24.0f;
+    const float titleY = besideMap ? H - 218.0f : 198.0f;
     // 大きな順位表示 ("P2/4")。
     std::snprintf(line, sizeof(line), "P%d/%d", position, int(list.size()));
-    hud.drawText(24.0f, 198.0f, 3.6f, line, 1.0f, position == 1 ? 0.85f : 0.95f,
+    hud.drawText(titleX, titleY, 3.6f, line, 1.0f, position == 1 ? 0.85f : 0.95f,
                  position == 1 ? 0.35f : 0.98f, 1);
     // 一覧。
-    const float x0 = 32.0f;
-    float y = 238.0f;
+    const float x0 = titleX + 8.0f;
+    float y = titleY + 40.0f;
     hud.addQuad(x0 - 8, y - 6, x0 + 210.0f, y + 24.0f * float(list.size()) + 2, 0.02f, 0.03f, 0.05f, 0.6f);
     for (size_t i = 0; i < list.size(); ++i) {
         const Standing& st = list[i];
@@ -500,7 +506,12 @@ void Hud::draw(Game& app) {
     if (!app.race().timing()) {
         std::snprintf(line, sizeof(line), "OUT LAP");
     } else {
-        std::snprintf(line, sizeof(line), "LAP %d", app.race().completed() + 1);
+        if (app.laps() > 0) {
+            std::snprintf(line, sizeof(line), "LAP %d/%d", std::min(app.race().completed() + 1, app.laps()),
+                          app.laps());
+        } else {
+            std::snprintf(line, sizeof(line), "LAP %d", app.race().completed() + 1);  // フリー走行
+        }
     }
     hud.drawText(24, 64, 2.2f, line, 0.85f, 0.88f, 0.92f, 1);
     formatTime(line, sizeof(line), app.race().lap());
@@ -622,7 +633,12 @@ void Hud::drawTitle(Game& app, float t) {
     centerText(H * 0.14f, 2.0f, "DRIFT RACE", 0.85f, 0.88f, 0.92f);
     centerText(H * 0.22f, 5.0f, app.title().c_str(), 1.0f, 0.95f, 0.9f);
     char line[96];
-    std::snprintf(line, sizeof(line), "%d LAPS RACE", kRaceLaps);
+    if (app.laps() > 0) {
+        std::snprintf(line, sizeof(line), "%d LAP%s RACE%s", app.laps(), app.laps() > 1 ? "S" : "",
+                      app.night() ? "  - NIGHT" : "");
+    } else {
+        std::snprintf(line, sizeof(line), "FREE RUN%s", app.night() ? "  - NIGHT" : "");
+    }
     centerText(H * 0.40f, 2.2f, line, 0.95f, 0.85f, 0.6f);
     // 決定の案内は点滅させる（目に留まりやすくするため）。
     if (std::sin(t * 3.2f) > -0.3f) {
@@ -635,7 +651,7 @@ void Hud::drawTitle(Game& app, float t) {
     // これまでに戦った対戦相手の人数 (名前が違う相手を 1 人と数える)。
     std::snprintf(line, sizeof(line), "OPPONENTS FACED: %d   WINS: %d", app.records().opponentsFaced(),
                   app.records().wins());
-    centerText(H * 0.455f, 2.0f, line, 0.95f, 0.85f, 0.55f);
+    centerText(H * 0.465f, 2.0f, line, 0.95f, 0.85f, 0.55f);
     drawSoundHint(app, (W - 32.0f * 6.0f * 1.8f) * 0.5f, H * 0.60f);
     hud.flushHud();
 }
@@ -649,9 +665,10 @@ void Hud::drawResult(Game& app, float t, int rank) {
     const Race& race = app.race();
     // 中央パネル (タイム一覧の土台)。
     const float pw = 620.0f;
-    const float ph = 540.0f;
+    // 画面が低いときはパネルを縮め、ランキングの行を入るぶんだけにする。
+    const float ph = std::min(540.0f, H - 16.0f);
     const float px = (W - pw) * 0.5f;
-    const float py = (H - ph) * 0.5f;
+    const float py = std::max(8.0f, (H - ph) * 0.5f);
     hud.addQuad(px, py, px + pw, py + ph, 0.02f, 0.03f, 0.05f, 0.88f);
     auto centerText = [&](float y, float scale, const char* text, float r, float g, float b) {
         float w = float(std::strlen(text)) * 6.0f * scale;
@@ -684,10 +701,10 @@ void Hud::drawResult(Game& app, float t, int rank) {
         std::snprintf(line, sizeof(line), "RANK #%d", rank + 1);
         centerText(py + 252, 2.4f, line, 0.95f, 0.85f, 0.5f);
     }
-    // コース別ランキング (上位 5 件)。今回のタイムと一致する行は目立たせる。
-    const std::vector<float>& board = app.ranking().entries(app.courseStem());
+    // コース別・周回数別のランキング (上位 5 件)。今回のタイムと一致する行は目立たせる。
+    const std::vector<float>& board = app.ranking().entries(app.rankingKey(app.courseStem(), app.laps()));
     float rowY = py + 300;
-    for (size_t i = 0; i < board.size(); ++i) {
+    for (size_t i = 0; i < board.size() && rowY + 20.0f < py + ph - 84.0f; ++i) {
         formatTime(time, sizeof(time), board[i]);
         std::snprintf(line, sizeof(line), "#%d  %s", int(i) + 1, time);
         bool mine = int(i) == rank;
@@ -700,13 +717,13 @@ void Hud::drawResult(Game& app, float t, int rank) {
     centerText(py + ph - 76, 1.8f, line, 0.95f, 0.85f, 0.55f);
     // 行き先の案内は点滅させる。
     if (std::sin(t * 3.2f) > -0.3f) {
-        centerText(py + ph - 44, 2.0f, "ENTER: RACE AGAIN    T: TITLE", 1.0f, 1.0f, 1.0f);
+        centerText(py + ph - 44, 2.0f, "ENTER: TITLE    R: RACE AGAIN", 1.0f, 1.0f, 1.0f);
     }
     hud.flushHud();
 }
 
-// セレクト画面の文字。4 つの項目 (ステージ・車種・対戦相手の数・AI の強さ) を
-// 並べ、選択中の行を枠と色で示す。値は < > で挟み、左右で変えられることを示す。
+// セレクト画面の文字。6 つの項目 (ステージ・昼夜・車種・周回数・対戦相手の数・
+// AI の強さ) を並べ、選択中の行を枠と色で示す。値は < > で挟み、左右で変えられることを示す。
 void Hud::drawSelect(Game& app, const SelectMenu& menu, float t) {
     IRenderer& hud = *app.renderer();
     hud.beginHud();
@@ -723,19 +740,22 @@ void Hud::drawSelect(Game& app, const SelectMenu& menu, float t) {
     char value[96];
     char time[32];
     const bool solo = menu.rivals == 0;
-    const float rowH = 62.0f;
-    const float top = H * 0.22f;
+    const float rowH = 50.0f;
+    const float top = H * 0.20f;
     const float panelW = std::min(W - 40.0f, 760.0f);
     const float px = (W - panelW) * 0.5f;
     for (int row = 0; row < SelectMenu::kRows; ++row) {
         const float y = top + rowH * float(row);
         const bool sel = row == menu.row;
-        const bool disabled = row == 3 && solo;  // ソロのときは AI の強さは関係ない
+        const bool disabled = row == SelectMenu::Level && solo;  // ソロのときは AI の強さは関係ない
         const char* label = "";
         switch (row) {
-        case 0: {
+        case SelectMenu::Stage: {
             label = "STAGE";
-            const float best = app.ranking().best(kCourses[menu.course].stem);
+            // ベストは周回数ごとの表から (フリー走行には合計タイムが無い)。
+            const float best = menu.laps() > 0
+                                   ? app.ranking().best(app.rankingKey(kCourses[menu.course].stem, menu.laps()))
+                                   : -1.0f;
             if (best > 0) {
                 formatTime(time, sizeof(time), best);
                 std::snprintf(value, sizeof(value), "%s  BEST %s", kCourses[menu.course].name, time);
@@ -744,11 +764,20 @@ void Hud::drawSelect(Game& app, const SelectMenu& menu, float t) {
             }
             break;
         }
-        case 1:
+        case SelectMenu::Time:
+            label = "TIME";
+            std::snprintf(value, sizeof(value), "%s", menu.night ? "NIGHT" : "DAY");
+            break;
+        case SelectMenu::Car:
             label = "CAR";
             std::snprintf(value, sizeof(value), "%s", kCarSpecs[menu.spec].name);
             break;
-        case 2:
+        case SelectMenu::Laps:
+            label = "LAPS";
+            if (menu.laps() > 0) std::snprintf(value, sizeof(value), "%d", menu.laps());
+            else std::snprintf(value, sizeof(value), "FREE RUN (NO GOAL)");
+            break;
+        case SelectMenu::Rivals:
             label = "RIVALS";
             if (solo) std::snprintf(value, sizeof(value), "SOLO (TIME ATTACK)");
             else std::snprintf(value, sizeof(value), "%d AI CAR%s", menu.rivals, menu.rivals > 1 ? "S" : "");

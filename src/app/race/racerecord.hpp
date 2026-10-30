@@ -35,11 +35,15 @@ struct RaceRecord {
     std::string course;          // コース stem (例: "suzuka")
     int car = 0;                 // 車種 (0..2)
     int level = -1;              // 対戦した AI の強さ (-1 はソロ)
-    float total = 0.0f;          // 規定周回の合計タイム (秒)
+    int laps = 3;                // 周回数 (1〜20)
+    float total = 0.0f;          // 全周回の合計タイム (秒)
     float bestLap = 0.0f;        // ベストラップ (秒)
     std::vector<float> profile;  // 区間ごとの速度 (m/s)、kProfileBins 個
 
-    // 1 行の文字列にする / 戻す。形式: R1|名前|コース|車種|強さ|合計|ベスト|速度,速度,...
+    // 1 行の文字列にする / 戻す。
+    //   形式: R2|名前|コース|車種|強さ|周回数|合計|ベスト|速度,速度,...
+    //   (周回数の無い旧形式 R1 も 3 周として読める)
+    // 記録どうしの速さは、周回数に左右されないベストラップで比べる。
     std::string serialize() const;
     static bool parse(const std::string& line, RaceRecord& out);
     // 値が妥当か (壊れた記録・ありえない記録を学習に使わないため)。

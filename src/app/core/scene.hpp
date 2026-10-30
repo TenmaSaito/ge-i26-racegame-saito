@@ -28,19 +28,24 @@ inline constexpr CourseInfo kCourses[] = {
 };
 inline constexpr int kCourseCount = 3;
 
+// 選べる周回数。0 は「無制限 (フリー走行)」: ゴールせず、好きなだけ走れる。
+inline constexpr int kLapOptions[] = {1, 2, 3, 5, 10, 0};
+inline constexpr int kLapOptionCount = 6;
+inline constexpr int kDefaultLapIndex = 2;  // 3 周
+
 // セレクト画面の選択状態 (シーンが持ち、HUD が表示する)。
 struct SelectMenu {
-    // 行: 0 = ステージ / 1 = 車種 / 2 = 対戦相手の数 / 3 = AI の強さ
-    static constexpr int kRows = 4;
-    int row = 0;
-    int course = 0;  // kCourses の添字
-    int spec = 0;    // 車種 0..2
-    int rivals = 3;  // 対戦相手の数 (0 = ソロ)
-    int level = 1;   // AI の強さ (AiLevel の値)
+    // 行の並び。
+    enum Row { Stage, Time, Car, Laps, Rivals, Level, kRows };
+    int row = Stage;
+    int course = 0;    // kCourses の添字
+    bool night = false;  // 夜のレースか
+    int spec = 0;      // 車種 0..2
+    int lapIndex = kDefaultLapIndex;  // kLapOptions の添字
+    int rivals = 3;    // 対戦相手の数 (0 = ソロ)
+    int level = 1;     // AI の強さ (AiLevel の値)
+    int laps() const { return kLapOptions[lapIndex]; }
 };
-
-// レースの周回数 (この周回数を完了したらリザルトへ)。
-inline constexpr int kRaceLaps = 3;
 
 // 全シーン共通の基底。状態は派生クラスの中に閉じる。
 class IScene {

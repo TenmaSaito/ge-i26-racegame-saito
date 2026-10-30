@@ -34,13 +34,13 @@ EM_JS(char*, netApiBaseJs, (), {
     return p;
 });
 
-// 記録 1 行 (R1|名前|コース|車種|強さ|合計|ベスト|速度,...) を JSON にして POST する。
+// 記録 1 行 (R2|名前|コース|車種|強さ|周回数|合計|ベスト|速度,...) を JSON にして POST する。
 EM_JS(void, netSubmitJs, (const char* base, const char* line), {
     var f = UTF8ToString(line).split("|");
-    if (f.length !== 8) return;
+    if (f.length !== 9) return;
     var body = {
-        name: f[1], course: f[2], car: Number(f[3]), level: Number(f[4]),
-        total: Number(f[5]), bestLap: Number(f[6]), profile: f[7].split(",").map(Number)
+        name: f[1], course: f[2], car: Number(f[3]), level: Number(f[4]), laps: Number(f[5]),
+        total: Number(f[6]), bestLap: Number(f[7]), profile: f[8].split(",").map(Number)
     };
     Module["raceNetState"] = "SENDING";
     fetch(UTF8ToString(base) + "/records", {
@@ -61,7 +61,7 @@ EM_JS(void, netRequestJs, (const char* base, const char* course), {
             var lines = (Array.isArray(list) ? list : []).filter(function (r) {
                 return r && Array.isArray(r.profile);
             }).map(function (r) {
-                return ["R1", clean(r.name), clean(r.course).toLowerCase(), r.car | 0, r.level | 0,
+                return ["R2", clean(r.name), clean(r.course).toLowerCase(), r.car | 0, r.level | 0, (r.laps | 0) || 3,
                         Number(r.total).toFixed(3), Number(r.bestLap).toFixed(3),
                         r.profile.map(function (v) { return Number(v).toFixed(1); }).join(",")].join("|");
             });

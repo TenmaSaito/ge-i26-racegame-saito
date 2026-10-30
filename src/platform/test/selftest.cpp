@@ -209,7 +209,6 @@ int soundTest() {
     SoundMixer mixer;
     mixer.setOutputRate(48000);
     mixer.setEngineLoop(loop);
-    mixer.setTireLoop(loop);
     std::vector<float> buf(2048 * 2);
     mixer.render(buf.data(), 2048);
     if (rms(buf) > 1e-4f) return 33;  // 何も指示していなければ無音
@@ -305,17 +304,25 @@ int recordTest() {
     r.course = "suzuka";
     r.car = 1;
     r.level = 2;
-    r.total = 300.5f;
+    r.laps = 5;
+    r.total = 500.5f;
     r.bestLap = 98.25f;
     r.profile.assign(kProfileBins, 40.0f);
     RaceRecord back;
     if (!RaceRecord::parse(r.serialize(), back) || back.name != "TESTER_01" || back.course != "suzuka" ||
-        std::fabs(back.total - 300.5f) > 0.01f || back.profile.size() != size_t(kProfileBins)) {
+        back.laps != 5 || std::fabs(back.total - 500.5f) > 0.01f || back.profile.size() != size_t(kProfileBins)) {
         std::printf("record-test: round trip failed\n");
         return 42;
     }
     if (RaceRecord::parse("R1|X|suzuka|0|0|10|20|1,2", back)) {
         return 43;  // ベストが合計より遅い・区間数が足りない記録は拒否
+    }
+    // 周回数の無い旧形式 (R1) は 3 周として読める。
+    std::string oldLine = "R1|OLD|suzuka|0|1|300|99|";
+    for (int i = 0; i < kProfileBins; ++i) oldLine += (i ? ",40" : "40");
+    if (!RaceRecord::parse(oldLine, back) || back.laps != 3) {
+        std::printf("record-test: old format failed\n");
+        return 50;
     }
 
     RecordBook book;
@@ -323,6 +330,7 @@ int recordTest() {
     RaceRecord other = r;
     other.name = "RIVAL";
     other.total = 290.0f;
+    other.bestLap = 95.0f;  // 速さはベストラップで比べる
     other.profile.assign(kProfileBins, 50.0f);
     book.addShared(other);
     if (book.addShared(other) != 0) return 44;  // 同じ記録は 2 度入らない

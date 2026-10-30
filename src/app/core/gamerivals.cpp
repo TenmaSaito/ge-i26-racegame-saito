@@ -101,6 +101,42 @@ DriveInput Game::autopilotInput(float dt) {
 }
 
 // ============================================================================
+// 照明 (夜)
+// ============================================================================
+void Game::applyLighting() {
+    if (!renderer_) {
+        return;
+    }
+    SceneLighting lighting;
+    if (night_) {
+        lighting.night = 1.0f;
+        // バックミラーは暗いと何も見えないので、明るさを上げて後ろの車を見やすくする。
+        lighting.exposure = inMirror_ ? 2.4f : 1.0f;
+        // ゴースト (過去の自分) は夜は青白く光らせる。ミラーではさらに強く。
+        lighting.ghostGlow = inMirror_ ? Vec3{0.20f, 0.55f, 0.70f} : Vec3{0.10f, 0.32f, 0.42f};
+        // ヘッドライト: プレイヤーと対戦相手の各車の先端から、前方やや下向きに照らす。
+        auto addHeadlight = [&](Vec3 pos, float yaw) {
+            if (lighting.lightCount >= SceneLighting::kMaxLights) return;
+            const Vec3 fwd{std::sin(yaw), 0.0f, std::cos(yaw)};
+            SpotLight& light = lighting.lights[lighting.lightCount++];
+            light.pos = pos + fwd * 2.4f + Vec3{0.0f, 0.65f, 0.0f};
+            light.dir = normalize(fwd + Vec3{0.0f, -0.07f, 0.0f});
+            light.color = Vec3{2.0f, 1.9f, 1.65f};
+        };
+        addHeadlight(viewPoseValid_ ? viewPos_ : Vec3{car_.x, car_.y, car_.z},
+                     viewPoseValid_ ? viewYaw_ : car_.yaw);
+        for (const Rival& rival : rivals_) {
+            addHeadlight({rival.viewX, rival.viewY, rival.viewZ}, rival.viewYaw);
+        }
+    }
+    renderer_->setLighting(lighting);
+}
+
+std::string Game::rankingKey(const std::string& stem, int laps) const {
+    return laps == 3 ? stem : stem + "-" + std::to_string(laps);
+}
+
+// ============================================================================
 // 順位
 // ============================================================================
 std::vector<Standing> Game::standings() const {
@@ -167,7 +203,10 @@ void Game::drawRivals(bool updateTilt) {
         const Mat4 model = mul(translation(0, 0.05f, 0), carModelMatrix(viewCar, rival.pitchSm, rival.rollSm));
         const int c = std::max(0, std::min(kMaxRivals - 1, rival.color));
         renderer_->draw(rivalBody_[c], model);
-        renderer_->draw(rival.car.drifting ? lampsOn_ : lampsOff_, model);
+        renderer_->draw((rival.car.drifting || night_) ? lampsOn_ : lampsOff_, model);
+        if (night_) {
+            renderer_->draw(headLamps_, model);  // 夜はヘッドランプが光る (ミラーでも目立つ)
+        }
         const float steerForWheel[2] = {rival.car.steerAngle, 0};
         for (int i = 0; i < 2; ++i) {
             for (int side = -1; side <= 1; side += 2) {

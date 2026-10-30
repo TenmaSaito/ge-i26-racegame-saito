@@ -78,10 +78,7 @@ int main(int argc, char** argv) {
     if (readFile(soundDir + "/engine.wav", bytes) && decodeWav(bytes, pcm)) {
         mixer.setEngineLoop(makeSeamlessLoop(pcm, 0.0f, 0.25f));
     }
-    if (readFile(soundDir + "/drift.wav", bytes) && decodeWav(bytes, pcm)) {
-        mixer.setTireLoop(makeSeamlessLoop(pcm, 0.06f, 0.35f));
-    }
-    if (!mixer.hasEngine() || !mixer.hasTire()) {
+    if (!mixer.hasEngine()) {
         std::fprintf(stderr, "音素材を読めません: %s\n", soundDir.c_str());
         return 1;
     }

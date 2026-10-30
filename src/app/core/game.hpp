@@ -127,6 +127,22 @@ public:
     EngineSim& engine() { return engine_; }
     const EngineSim& engine() const { return engine_; }
 
+    // --- レースの設定 (選択画面が決める) ---
+    // 夜のレースか (夜は暗くなり、車のヘッドライトで照らす)。
+    bool night() const { return night_; }
+    void setNight(bool on) { night_ = on; }
+    // 周回数 (0 = 周回無制限のフリー走行。ゴールせず、ポーズからタイトルへ戻る)。
+    int laps() const { return laps_; }
+    void setLaps(int n) { laps_ = n < 0 ? 0 : n; }
+    // ランキングの保存キー (周回数ごとに別の表にする。3 周はコース名そのまま)。
+    std::string rankingKey(const std::string& stem, int laps) const;
+    // 描画用のプレイヤーのポーズ (レースでは補間後のポーズ)。ヘッドライトの位置に使う。
+    void setPlayerViewPose(Vec3 pos, float yaw) {
+        viewPos_ = pos;
+        viewYaw_ = yaw;
+        viewPoseValid_ = true;
+    }
+
     // --- 対戦相手 (AI) ---
     // 出走させる対戦相手の数 (0 = ソロ / 1〜kMaxRivals) と強さ。選択画面が設定する。
     static constexpr int kMaxRivals = 3;
@@ -283,6 +299,16 @@ private:
     std::function<void(const char*)> debugSink_;              // ページ側デバッグ送信
     std::function<void(const std::string&)> saveSink_;        // チューニング保存
 
+    // --- レースの設定と照明 ---
+    bool night_ = false;          // 夜のレースか
+    int laps_ = 3;                // 周回数 (0 = 無制限)
+    Vec3 viewPos_{0, 0, 0};       // 描画用のプレイヤーのポーズ (ヘッドライト用)
+    float viewYaw_ = 0;
+    bool viewPoseValid_ = false;
+    bool inMirror_ = false;       // バックミラーを描いている最中か
+    // 現在の設定から照明を組み立てて描画ポートへ渡す (beginWorldDraw の頭で)。
+    void applyLighting();
+
     // --- GPU メッシュ (renderer_ にアップロード済みの形状) ---
     GpuMesh body_;        // 車体
     GpuMesh wheel_;       // ホイール
@@ -292,6 +318,7 @@ private:
     GpuMesh lampsOff_;    // テールランプ (消灯)
     GpuMesh lampsOn_;     // テールランプ (ドリフト中)
     GpuMesh lampsBright_; // テールランプ (ブレーキ)
+    GpuMesh headLamps_;   // ヘッドランプ (夜だけ点灯)
     std::vector<GpuMesh> scenery_;        // 景観チャンク (距離カリングして描く)
     std::vector<Vec3> sceneryCenters_;    // 各チャンクの中心 (カリング用)
 

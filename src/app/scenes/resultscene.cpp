@@ -20,17 +20,17 @@ void ResultScene::enter() {
 }
 
 void ResultScene::frame(double dt) {
-    // 入力: 決定 = もう一度レース、T = タイトルへ、Esc = 終了。
+    // 入力: 決定 (Enter) または T = タイトルへ戻る、R = 同じ設定でもう一度、Esc = 終了。
     UiActions ui = input::pollUi(false);
     if (ui.quit) {
         game_.requestQuit();
     }
-    if (ui.confirm) {
-        game_.requestScene(SceneId::Race);
+    if (ui.confirm || ui.tuningToggle) {
+        game_.requestScene(SceneId::Title);
         return;
     }
-    if (ui.tuningToggle) {
-        game_.requestScene(SceneId::Title);
+    if (ui.reset) {
+        game_.requestScene(SceneId::Race);
         return;
     }
     t_ += dt;
