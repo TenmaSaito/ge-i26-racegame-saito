@@ -604,7 +604,9 @@ void Hud::draw(Game& app) {
     }
     drawMinimap(app);
 #ifdef __EMSCRIPTEN__
-    sendDebugToPage(app);
+    if (app.showDriftDebug()) {
+        sendDebugToPage(app);  // ページ側に受け口 (window.raceSetDebug) があるときだけ届く
+    }
 #else
     if (app.showDriftDebug()) {
         drawDriftDebug(app);

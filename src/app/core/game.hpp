@@ -329,7 +329,7 @@ private:
     bool drawBackdrop_ = true;    // 地形を描くか (ミラー描画時は省く)
     bool paused_ = false;         // ポーズ中か (P キー)
     bool showHelp_ = true;        // キー説明の表示 (H キー、ネイティブのみ)
-    bool showDriftDebug_ = true;  // ドリフトデバッグ表示 (B キー)
+    bool showDriftDebug_ = false; // ドリフトデバッグ表示 (B キーで切替、既定は非表示)
     bool showTuning_ = false;     // チューニングパネル表示 (T キー)
     int tuneIndex_ = 0;           // パネルで選択中の項目
     int carSpec_ = 0;             // 選択中の車種 (1/2/3 キー)
