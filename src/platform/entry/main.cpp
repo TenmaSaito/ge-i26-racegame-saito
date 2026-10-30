@@ -9,6 +9,7 @@
 #include "bench.hpp"
 #include "game.hpp"
 #include "platform.hpp"
+#include "racerecord.hpp"  // kPlayerNameStorageKey / sanitizeName
 #include "selftest.hpp"
 #include "track.hpp"
 #include "tuning.hpp"
@@ -58,11 +59,17 @@ std::string pickTrackStem(int argc, char** argv) {
 int main(int argc, char** argv) {
     bool test = false;
     const char* benchMode = nullptr;  // --bench <full|nofx|noscene>
+    bool autopilot = false;           // --autopilot
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--self-test") == 0) {
             test = true;
         } else if (std::strcmp(argv[i], "--bench") == 0 && i + 1 < argc) {
             benchMode = argv[i + 1];
+        } else if (std::strcmp(argv[i], "--autopilot") == 0) {
+            autopilot = true;  // 動作確認用: プレイヤーの車も AI が運転する
+        } else if (std::strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+            // プレイヤー名を保存する (次回以降も使われる)。走行記録と順位表に出る名前。
+            platform::saveSetting(kPlayerNameStorageKey, sanitizeName(argv[i + 1]));
         }
     }
     std::string stem = pickTrackStem(argc, argv);
@@ -97,6 +104,9 @@ int main(int argc, char** argv) {
     Game app{stem};
     if (!platform::createWindow(app)) {
         return 1;
+    }
+    if (autopilot) {
+        app.setAutopilot(true);
     }
     app.init();
     if (benchMode) {

@@ -68,6 +68,12 @@
   .frame-bar nav a{color:#cfeeff; text-decoration:none; font-size:12.5px; font-weight:700; letter-spacing:.14em}
   .frame-bar nav a:hover{color:#fff}
   .frame-bar nav .current{color:#7fd4ff; font-size:12.5px; font-weight:700; letter-spacing:.14em}
+  .name-field { display: flex; align-items: center; gap: 8px; font-size: 13px; opacity: .9; }
+  .name-field input {
+    width: 9.5em; padding: 7px 12px; border-radius: 999px; font-size: 14px; letter-spacing: .08em;
+    color: #eaf6ff; background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.35);
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -83,7 +89,7 @@
 <header>
   <h1>ドリフトレース（仮）</h1>
   <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
-  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-30 · SOUND ENGINE 2</p>
+  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-30 · AI RIVALS</p>
 </header>
 
 <div id="wrap">
@@ -92,6 +98,7 @@
 <div id="status">読み込み中…</div>
 <div id="audioState" style="text-align:center;font-size:12px;opacity:.8;min-height:1.3em;">AUDIO: -</div>
 <div class="bar">
+  <label class="name-field">プレイヤー名 <input id="playerName" type="text" maxlength="12" placeholder="PLAYER" autocomplete="off" spellcheck="false"></label>
   <button id="fs" type="button">全画面で遊ぶ</button>
 </div>
 
@@ -147,6 +154,30 @@
     canvasEl.dispatchEvent(new KeyboardEvent('keydown', opt));
     canvasEl.dispatchEvent(new KeyboardEvent('keyup', opt));
   });
+</script>
+<script>
+  // 走行記録の共有サーバー (server/README.md の手順で Cloudflare Workers に置いた URL)。
+  // 空のままなら記録は手元 (このブラウザ) だけに残り、AI の学習もそれで行う。
+  window.RACEGAME_API = window.RACEGAME_API || '';
+
+  // プレイヤー名の入力欄。英大文字・数字・_- の 12 文字まで (ゲーム内フォントで
+  // 表示できる文字だけ)。値は localStorage に保存し、次のレースから使われる。
+  (function () {
+    var KEY = 'racegamePlayerName';
+    var input = document.getElementById('playerName');
+    if (!input) return;
+    try { input.value = localStorage.getItem(KEY) || ''; } catch (e) {}
+    function clean(s) { return String(s).toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 12); }
+    input.addEventListener('input', function () {
+      var v = clean(input.value);
+      if (v !== input.value) input.value = v;
+      try { localStorage.setItem(KEY, v); } catch (e) {}
+    });
+    // 入力中のキーがゲームの操作として扱われないようにする。
+    ['keydown', 'keyup', 'keypress'].forEach(function (type) {
+      input.addEventListener(type, function (e) { e.stopPropagation(); });
+    });
+  })();
 </script>
 <script async src="racegame.js"></script>
 <script>

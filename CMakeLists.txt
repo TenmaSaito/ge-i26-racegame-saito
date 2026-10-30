@@ -35,6 +35,8 @@ message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 #   carmodel.cpp 車体モデル（追加形状と車種）
 #   car/track/scenery/render  ロジックと描画（SDL 非依存を維持）
 #   enginesim.cpp エンジン回転数とギア（音と HUD 用のモデル）
+#   aidriver.cpp 対戦相手の AI（速度計画＋純追跡）、racerecord.cpp 走行記録と学習
+#   recordservice.cpp 走行記録のオンライン共有（ブラウザは fetch、サーバーは server/）
 #   sound/*      音の合成（WAV 読み込み・ループ加工・ミキサー。SDL 非依存）
 #   audio.cpp    音声デバイスとの接続（SDL2 の音声 API）
 #   selftest.cpp 自己検証（--self-test）
@@ -46,10 +48,12 @@ add_executable(racegame
     src/platform/render/render.cpp
     src/platform/render/glapi.cpp
     src/platform/audio/audio.cpp
+    src/platform/net/recordservice.cpp
     src/platform/input/input.cpp
     src/platform/test/selftest.cpp
     src/platform/test/bench.cpp
     src/app/core/game.cpp
+    src/app/core/gamerivals.cpp
     src/app/core/object.cpp
     src/app/scenes/titlescene.cpp
     src/app/scenes/selectscene.cpp
@@ -61,6 +65,8 @@ add_executable(racegame
     src/app/race/race.cpp
     src/app/race/ghost.cpp
     src/app/race/ranking.cpp
+    src/app/race/aidriver.cpp
+    src/app/race/racerecord.cpp
     src/app/vehicle/carmodel.cpp
     src/app/vehicle/enginesim.cpp
     src/domain/vehicle/car.cpp
@@ -78,7 +84,7 @@ target_include_directories(racegame PRIVATE
     src/app/core src/app/scenes src/app/view src/app/race src/app/vehicle
     src/ports
     src/platform/entry src/platform/system src/platform/render
-    src/platform/input src/platform/test src/platform/audio)
+    src/platform/input src/platform/test src/platform/audio src/platform/net)
 
 
 set(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")

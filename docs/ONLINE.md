@@ -1,54 +1,51 @@
-# オンライン機能の案 (ランキング / ゴースト共有)
+# オンライン機能 (走行記録の共有と AI の学習)
 
-GitHub Pages は**静的ホスティング専用**で、ページ側からデータを書き込む先が
-ありません。そのため「Pages に置いたゲーム + 外部の小さな受け口」という
-分担が現実解です。受け口の候補を比較します。
-
-## 候補の比較
-
-| 候補 | 書き込み | 費用 | 備考 |
-|---|---|---|---|
-| Cloudflare Workers + KV | REST API を自作 | 無料枠で十分 | CORS 制御可・JSON・高速。**本命** |
-| Supabase (Postgres) | REST / SDK | 無料枠あり | テーブル設計が楽。ランキングの集計を SQL で書ける |
-| Firebase (Firestore) | SDK | 無料枠あり | SDK が重め。Wasm からの利用は fetch 経由になる |
-| Google Forms + Sheets 公開 CSV | フォームへ POST / CSV 読取 | 無料 | 手軽だが形式が粗く、改ざん・スパムに弱い。試作向き |
-| GitHub Issues / API | 要トークン | 無料 | トークンをクライアントに埋め込むことになり**不可** |
-
-## 推奨構成 (Cloudflare Workers + KV)
-
-- ゲーム (GitHub Pages 上の Wasm) から `fetch` で Worker を叩く。
-- Worker が KV に「コース別ランキング」と「ゴーストデータ」を保存する。
-- ネイティブ版は当面ローカルランキングのまま (HTTP クライアントを持たないため)。
-  将来やるなら libcurl 等の導入が別途必要。
-
-### API の叩き台
+## 構成
 
 ```
-POST /score    { course, totalMs, bestLapMs, name } -> { rank }
-GET  /ranking?course=suzuka -> [ { name, totalMs, bestLapMs, date } ... ] (上位20)
-POST /ghost    { course, lapMs, samples: [...] }     (最速ラップのポーズ列)
-GET  /ghost?course=suzuka -> { lapMs, samples }      (世界最速 or 週間最速のゴースト)
+ゲーム (GitHub Pages 上の Wasm)                       Cloudflare Workers + KV (無料枠)
+  RaceScene ─ ProfileRecorder (区間速度を記録)
+  Game::recordResult ─ RecordBook (手元の記録・学習)
+        │  1 行形式 (RaceRecord::serialize)
+        ▼
+  IRecordService (ports/recordservice.hpp)
+        │  ブラウザ: fetch (platform/net/recordservice.cpp)
+        ▼
+  POST /records  ───────────────────────────────▶  server/worker.js (検証・連投制限)
+  GET  /records?course=…  ◀──────────────────────  コースごとに速い 30 件
 ```
 
-- ゴーストの samples は現行の Ghost 記録 (60Hz の x/y/z/yaw) をそのまま
-  間引いて送る想定。1 ラップ約 6,000 点 × 16 バイト ≒ 100KB なので、
-  30Hz 間引き + 座標の小数丸めで 30KB 程度に収まる。
-- 名前は自由入力 (初期値 "PLAYER")。認証は付けない代わりに、
-  Worker 側で最低限の検証 (値域チェック・レート制限・コース名の許可リスト)
-  を入れる前提。
+- GitHub Pages は静的ホスティングなので、書き込み先として Cloudflare Workers + KV を使う
+  （無料枠: 1 日 10 万リクエスト・KV 書き込み 1,000 回。個人の作品なら十分）。
+- ゲーム側に鍵を置かず、サーバーが値を検証する。詳細と公開手順は [server/README.md](../server/README.md)。
+- 送り先 URL はページの `window.RACEGAME_API` で設定する。空ならオンライン機能は使わず、
+  記録は手元（ブラウザの localStorage / ネイティブは設定ファイル）だけに残る。
+- ネイティブ版（Windows / Linux / Android）は今は手元だけ。HTTP ライブラリ（libcurl や
+  プラットフォームの API）で `recordservice.cpp` の 4 つの関数を実装すれば、ゲーム側は変更なしで対応できる。
 
-### ゲーム側の実装ポイント
+## 走行記録 (RaceRecord)
 
-- 通信は新しいポート (例: `net.hpp` の `INet` / スコア送信キュー) として
-  アプリケーション層から分離し、ブラウザ実装だけ fetch を使う。
-  送信は非同期で、失敗してもゲームは止めない (ローカル保存が正)。
-- ランキング画面は「ローカル / オンライン」のタブ切替にする想定。
+ゴールするたびに 1 件作る。
 
-## 段階導入の案
+| 項目 | 内容 |
+|---|---|
+| name | プレイヤー名（ページの入力欄。英大文字・数字・_- の 12 文字まで） |
+| course / car / level | コース・車種・対戦した AI の強さ（ソロは -1） |
+| total / bestLap | 3 周の合計タイム・ベストラップ |
+| profile | ベストラップの区間速度。コースを 100 区間に分け、各区間の平均速度 (m/s) |
 
-1. (済) ローカルランキング — コース別トップ 5、localStorage / ファイル保存。
-2. Workers + KV で `/score` と `/ranking` だけ先に作り、オンラインランキング表示。
-3. ゴースト共有 (世界最速のゴーストと走れる) — インパクトが大きいので本命機能。
-4. 週次リセットやコース別イベントなどの運用はその後。
+## 学習のしくみ
 
-このドキュメントは案の提示までで、実装は未着手です。
+1. **速度の学習**: コースごとに、手元と共有の記録を速い順に並べ、上位 5 件の区間速度を
+   重み付きで平均する（`RecordBook::learnedProfile`）。AI はコースの曲率から求めた
+   速度計画に、これを強さに応じた割合（EASY 30% / NORMAL 60% / HARD 90%）で混ぜる。
+   人間が実際に速く走っている区間では AI も攻め、慎重な区間では AI も控える。
+2. **相手のモデル化**: 共有された他の人の記録のうち、自分のベストに近い速さの人を選び、
+   その人の名前で出走させる。その AI はその人の区間速度を強く真似る（`pickRivalModels`）。
+3. **強さの調整**: レース結果から、難易度ごとのペースを ±1.5% ずつ動かす
+   （勝てば速く、最下位なら遅く、上限 ±8%）。同じ難易度でも接戦になりやすくなる。
+
+## 対戦の記録
+
+`RecordBook` は、これまでに戦った相手の名前（重複なし）・対戦した延べ人数・1 位になった回数を持つ。
+タイトル・選択・リザルトの各画面に「OPPONENTS FACED（戦った相手の人数）」として表示する。

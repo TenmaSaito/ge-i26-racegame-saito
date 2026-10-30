@@ -28,6 +28,17 @@ inline constexpr CourseInfo kCourses[] = {
 };
 inline constexpr int kCourseCount = 3;
 
+// セレクト画面の選択状態 (シーンが持ち、HUD が表示する)。
+struct SelectMenu {
+    // 行: 0 = ステージ / 1 = 車種 / 2 = 対戦相手の数 / 3 = AI の強さ
+    static constexpr int kRows = 4;
+    int row = 0;
+    int course = 0;  // kCourses の添字
+    int spec = 0;    // 車種 0..2
+    int rivals = 3;  // 対戦相手の数 (0 = ソロ)
+    int level = 1;   // AI の強さ (AiLevel の値)
+};
+
 // レースの周回数 (この周回数を完了したらリザルトへ)。
 inline constexpr int kRaceLaps = 3;
 

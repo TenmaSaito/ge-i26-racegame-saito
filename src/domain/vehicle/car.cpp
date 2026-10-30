@@ -17,11 +17,11 @@ constexpr float kWheelbase = 3.05f;
 constexpr float kSteerRate = 2.6f;
 constexpr float kWheelRadius = 0.34f;
 
+}  // namespace
+
 float maxSteerAt(float speed) {
     return 0.46f / (1.0f + std::fabs(speed) * 0.085f);
 }
-
-}  // namespace
 
 // ドリフトの調整値の実体。既定値は DriftTuning（car.hpp）の初期化子。
 // 実行時の変更はチューニングパネル（main.cpp）からこの変数を書き換える。
@@ -463,9 +463,9 @@ void Car::update(float dt, const DriveInput& input, const Track& track) {
     onAsphalt = std::fabs(ground.lateral) <= track.halfWidth + 0.15f;
 }
 
-void buildCarBody(CpuMesh& mesh, int spec) {
+void buildCarBody(CpuMesh& mesh, int spec, const Vec3* color) {
     // 車種ごとに色とリアウイングの形を少し変える (性能差の見た目表現)。
-    const Vec3 red = carSpecColor(spec);
+    const Vec3 red = color ? *color : carSpecColor(spec);
     const Vec3 dark{0.06f, 0.06f, 0.07f};
     const Vec3 carbon{0.12f, 0.12f, 0.13f};
     mesh.addBox({-0.88f, 0.32f, -2.05f}, {0.88f, 0.62f, 2.05f}, red);

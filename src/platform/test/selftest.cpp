@@ -7,11 +7,13 @@
 
 #include "selftest.hpp"
 
+#include "aidriver.hpp"   // AI ドライバーの検証用
 #include "car.hpp"
 #include "enginesim.hpp"  // EngineSim (ギアと回転数) の検証用
 #include "effects.hpp"  // タイヤ痕の生成テスト用
 #include "ghost.hpp"    // Ghost の検証用
 #include "race.hpp"     // Race (ロケットスタート検証用)
+#include "racerecord.hpp"  // 走行記録と学習の検証用
 #include "object.hpp"   // ObjectManager の検証用
 #include "pcm.hpp"         // WAV 読み込み・ループ加工の検証用
 #include "scenery.hpp"  // SceneryBuilder (地形) の検証用
@@ -255,6 +257,92 @@ int soundTest() {
     return 0;
 }
 
+// ============================================================================
+// AI と走行記録の自己確認
+// ============================================================================
+
+// AI が 1 人でコースを 1 周できること (強さごと)。ラップタイムと壁への接触を表示する。
+// 強い AI ほど速いこと (EASY > NORMAL > HARD のラップタイム) も確かめる。
+int aiTest(const Track& track) {
+    const float dt = 1.0f / 60.0f;
+    float laps[kAiLevelCount] = {0, 0, 0};
+    std::printf("ai-test spawn at s=%.1f of %.1f m\n", spawnDistance(track), track.length);
+    for (int level = 0; level < kAiLevelCount; ++level) {
+        Car car;
+        placeCarOnTrack(car, track, spawnDistance(track), 0.0f);
+        AiDriver driver;
+        driver.prepare(track, aiSkillFor(AiLevel(level), 0.0f), {}, 12345u);
+        Race race;
+        race.reset();
+        int wallSteps = 0;
+        float maxLateral = 0.0f;
+        for (int step = 0; step < 60 * 600 && race.completed() < 1; ++step) {
+            DriveInput in = driver.drive(car, track, dt, {});
+            car.update(dt, in, track);
+            race.tick(car.ground.s, track.length, dt);
+            if (car.wallContact) ++wallSteps;
+            maxLateral = std::max(maxLateral, std::fabs(car.ground.lateral));
+        }
+        std::printf("ai-test %-6s lap %.2f s  wall %.1f s  maxLat %.1f m\n", aiLevelName(AiLevel(level)),
+                    race.lastLap(), float(wallSteps) * dt, maxLateral);
+        if (race.completed() < 1) {
+            std::printf("ai-test: %s did not finish a lap\n", aiLevelName(AiLevel(level)));
+            return 40;
+        }
+        laps[level] = race.lastLap();
+    }
+    if (!(laps[0] > laps[1] && laps[1] > laps[2])) {
+        std::printf("ai-test: levels are not ordered by pace\n");
+        return 41;
+    }
+    return 0;
+}
+
+// 走行記録の保存形式と学習の確認。
+int recordTest() {
+    RaceRecord r;
+    r.name = "tester 01";
+    r.course = "suzuka";
+    r.car = 1;
+    r.level = 2;
+    r.total = 300.5f;
+    r.bestLap = 98.25f;
+    r.profile.assign(kProfileBins, 40.0f);
+    RaceRecord back;
+    if (!RaceRecord::parse(r.serialize(), back) || back.name != "TESTER_01" || back.course != "suzuka" ||
+        std::fabs(back.total - 300.5f) > 0.01f || back.profile.size() != size_t(kProfileBins)) {
+        std::printf("record-test: round trip failed\n");
+        return 42;
+    }
+    if (RaceRecord::parse("R1|X|suzuka|0|0|10|20|1,2", back)) {
+        return 43;  // ベストが合計より遅い・区間数が足りない記録は拒否
+    }
+
+    RecordBook book;
+    book.addOwn(r);
+    RaceRecord other = r;
+    other.name = "RIVAL";
+    other.total = 290.0f;
+    other.profile.assign(kProfileBins, 50.0f);
+    book.addShared(other);
+    if (book.addShared(other) != 0) return 44;  // 同じ記録は 2 度入らない
+    const std::vector<float> learned = book.learnedProfile("suzuka");
+    // 速い記録 (50 m/s) の重みが大きいので、平均は 45 より 50 寄りになる。
+    if (learned.size() != size_t(kProfileBins) || !(learned[0] > 45.0f && learned[0] < 50.0f)) return 45;
+    if (book.pickRivalModels("suzuka", "TESTER_01", 3).size() != 1) return 46;
+
+    book.noteRace(1, {"RIVAL", "AKAGI"}, 1, 3);
+    book.noteRace(1, {"RIVAL"}, 2, 2);
+    if (book.opponentsFaced() != 2 || book.battles() != 3 || book.wins() != 1) return 47;
+    if (!(book.paceAdjust(1) == 0.0f)) return 48;  // 1 回勝って 1 回最下位 → 補正は元に戻る
+
+    RecordBook restored;
+    restored.deserialize(book.serialize());
+    if (restored.opponentsFaced() != 2 || restored.battles() != 3 || restored.sharedCount("suzuka") != 1) return 49;
+    std::printf("self-test records ok (learned %.1f m/s)\n", learned[0]);
+    return 0;
+}
+
 int runSelfTest(const Track& track, float minLength, float maxLength) {
     int driftResult = driftTest(track);
     if (driftResult != 0) {
@@ -406,6 +494,13 @@ int runSelfTest(const Track& track, float minLength, float maxLength) {
     }
     // 音: WAV 読み込み・ループの継ぎ目・ミキサーの鳴らし分け・ギアシフト。
     if (int rc = soundTest()) {
+        return rc;
+    }
+    // 対戦相手の AI と、走行記録・学習。
+    if (int rc = aiTest(track)) {
+        return rc;
+    }
+    if (int rc = recordTest()) {
         return rc;
     }
     // タイヤ痕: ドリフト状態の車を直進させると、痕の区間が刻まれること。

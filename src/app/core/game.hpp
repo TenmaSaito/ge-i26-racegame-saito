@@ -19,12 +19,13 @@
 #include "audio.hpp"    // IAudio (音声ポート)
 #include "enginesim.hpp"  // EngineSim (エンジン回転数・ギア)
 #include "ghost.hpp"    // Ghost (前回の自分のゴースト)
+#include "racerecord.hpp"     // RecordBook (走行記録と学習)
 #include "ranking.hpp"  // Ranking (ローカルランキング)
-
-#include <functional>
+#include "recordservice.hpp"  // IRecordService (記録のオンライン共有ポート)
+#include "rival.hpp"          // Rival / Standing (対戦相手と順位)
 #include "scene.hpp"    // IScene / SceneId
-#include "track.hpp"
-#include "scenery.hpp"  // SceneryBuilder (地形の高さ参照用)    // Track
+#include "scenery.hpp"  // SceneryBuilder (地形の高さ参照用)
+#include "track.hpp"    // Track
 
 #include <functional>
 #include <memory>
@@ -125,6 +126,53 @@ public:
     // エンジン回転数のモデル (音の音程と HUD のギア表示が共有する)。
     EngineSim& engine() { return engine_; }
     const EngineSim& engine() const { return engine_; }
+
+    // --- 対戦相手 (AI) ---
+    // 出走させる対戦相手の数 (0 = ソロ / 1〜kMaxRivals) と強さ。選択画面が設定する。
+    static constexpr int kMaxRivals = 3;
+    int rivalCount() const { return rivalCount_; }
+    void setRivalCount(int n) { rivalCount_ = n < 0 ? 0 : (n > kMaxRivals ? kMaxRivals : n); }
+    AiLevel aiLevel() const { return aiLevel_; }
+    void setAiLevel(AiLevel level) { aiLevel_ = level; }
+    std::vector<Rival>& rivals() { return rivals_; }
+    const std::vector<Rival>& rivals() const { return rivals_; }
+    // 現在の順位表 (前から順)。ソロならプレイヤー 1 行だけ。
+    std::vector<Standing> standings() const;
+    // プレイヤーの順位 (1 始まり)。
+    int playerPosition() const;
+    // 対戦相手を描く (レースシーンから)。updateTilt は 1 フレームに 1 回だけ true。
+    void drawRivals(bool updateTilt);
+
+    // --- 走行記録・学習・オンライン共有 ---
+    RecordBook& records() { return recordBook_; }
+    const RecordBook& records() const { return recordBook_; }
+    ProfileRecorder& profileRecorder() { return profileRecorder_; }
+    // 記録の保存口と、オンライン共有の実装を差し込む (platform が起動時に)。
+    void setRecordsSink(std::function<void(const std::string&)> sink) { recordsSink_ = std::move(sink); }
+    void setRecordsText(const std::string& text) { recordBook_.deserialize(text); }
+    void installRecordService(IRecordService* service) { recordService_ = service; }
+    // オンラインの状態表示 ("ONLINE" / "LOCAL ONLY" など)。
+    std::string onlineStatus() const { return recordService_ ? recordService_->status() : "LOCAL ONLY"; }
+    // 現在のコースの共有記録を取りに行く (選択画面に入ったときなど)。
+    void requestSharedRecords();
+    // プレイヤー名の取得口 (ページの入力欄・設定ファイルを読む実装を platform が渡す)。
+    void setPlayerNameSource(std::function<std::string()> source) { playerNameSource_ = std::move(source); }
+    std::string playerName() const;
+    // 直近のレース結果 (リザルト画面用)。
+    struct RaceOutcome {
+        int position = 1;   // 順位 (1 始まり)
+        int entrants = 1;   // 出走台数 (自分を含む)
+        bool shared = false;  // 記録をオンラインへ送ったか
+    };
+    const RaceOutcome& lastOutcome() const { return lastOutcome_; }
+
+    // --- 自動運転 (動作確認・デモ用) ---
+    // オンにすると、プレイヤーの車も AI (HARD) が運転する。
+    // ブラウザは URL の ?autopilot=1、ネイティブは --autopilot で有効になる。
+    bool autopilot() const { return autopilot_; }
+    void setAutopilot(bool on) { autopilot_ = on; }
+    // 自動運転の操作 (1 物理ステップ分)。
+    DriveInput autopilotInput(float dt);
     const Ghost& ghost() const { return ghost_; }
     // ゴーストを半透明で描く (計測中で保存済みがあるときだけ実働)。
     void drawGhost();
@@ -199,6 +247,29 @@ private:
     Car car_;            // 自車
     Race race_;          // 周回・計時
     EngineSim engine_;   // エンジン回転数とギア (音と HUD 用)
+
+    // --- 対戦相手と記録 ---
+    std::vector<Rival> rivals_;           // 対戦相手 (resetRace で並べ直す)
+    int rivalCount_ = 3;                  // 出走させる対戦相手の数 (0 = ソロ)
+    AiLevel aiLevel_ = AiLevel::Normal;   // 対戦相手の強さ
+    uint32_t raceSeed_ = 1;               // レースごとに変える乱数の種 (名前・ぶれ)
+    RecordBook recordBook_;               // 走行記録と学習結果
+    ProfileRecorder profileRecorder_;     // プレイヤーの区間速度の記録
+    RaceOutcome lastOutcome_;             // 直近のレース結果
+    IRecordService* recordService_ = nullptr;  // オンライン共有 (所有は platform)
+    std::function<void(const std::string&)> recordsSink_;  // 記録の保存口
+    std::function<std::string()> playerNameSource_;        // プレイヤー名の取得口
+    GpuMesh rivalBody_[kMaxRivals];       // 対戦相手のボディ (色違い)
+    GpuMesh rivalWheel_[kMaxRivals];      // 対戦相手のホイール (ハブの色違い)
+    bool autopilot_ = false;              // プレイヤーの車を AI が運転するか
+    AiDriver autopilotDriver_;            // そのときの運転手
+
+    // 対戦相手をスタートグリッドに並べ、運転の準備 (速度計画) をする。
+    void setupRivals();
+    // 記録を保存口へ流す。
+    void saveRecords();
+    // オンラインから届いた記録を取り込む (毎フレーム)。
+    void pollSharedRecords();
     Orbit camera_;       // カメラ状態
     Effects effects_;    // 煙・光跡・タイヤ痕
     ObjectManager objects_;         // 全オブジェクトの一括管理 (景観・Player)

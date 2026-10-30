@@ -23,6 +23,13 @@ namespace {
 // 上限はタブ復帰などの大きな隙間で物理が暴走しないための頭打ち。
 constexpr double kFixedStepSec = 1.0 / 60.0;
 constexpr double kMaxFrameSec = 0.25;
+
+// 角度の差を -π..π に畳む (補間で 1 周回り込まないように)。
+float wrapAngle(float a) {
+    while (a > 3.14159265f) a -= 6.2831853f;
+    while (a < -3.14159265f) a += 6.2831853f;
+    return a;
+}
 }  // namespace
 
 // ============================================================================
@@ -132,6 +139,9 @@ DriveInput RaceScene::readDriveInput(DriveInput& raw, bool& resetRequested) {
     Game& app = game_;
     PadPulse padPulse;
     raw = input::sampleDrive(padPulse, app.car().drifting);
+    if (app.autopilot() && !app.race().counting() && !app.paused()) {
+        raw = app.autopilotInput(float(kFixedStepSec));  // 動作確認用: AI が代わりに運転する
+    }
     app.setLastInput(raw);
 
     DriveInput input = raw;
@@ -202,6 +212,12 @@ void RaceScene::stepPhysics(double elapsed, const DriveInput& input) {
             car.speed += app.race().launchPower() * 30.0f * float(kFixedStepSec) * fade;
         }
         app.race().tick(car.ground.s, app.track().length, float(kFixedStepSec));
+        if (app.race().timing()) {
+            // 学習用: コースのどの区間を何 m/s で走ったか。
+            app.profileRecorder().sample(car.ground.s, std::sqrt(car.velX * car.velX + car.velZ * car.velZ));
+        }
+        stepRivals(float(kFixedStepSec));
+        resolveContacts();
         // ゴースト: 計測が始まったら記録開始、計測中は毎ステップ記録、
         // 周回が完了したら最速判定つきで締める。
         if (app.race().timing() && !wasTiming_) {
@@ -213,6 +229,7 @@ void RaceScene::stepPhysics(double elapsed, const DriveInput& input) {
         wasTiming_ = app.race().timing();
         if (app.race().completed() != prevCompleted_) {
             app.ghost().finishLap(app.race().lastLap());
+            app.profileRecorder().finishLap(app.race().lastLap());
             prevCompleted_ = app.race().completed();
         }
         accumulator_ -= kFixedStepSec;
@@ -242,12 +259,103 @@ void RaceScene::stepPhysics(double elapsed, const DriveInput& input) {
     viewX_ = prevX_ + (car.x - prevX_) * alpha;
     viewY_ = prevY_ + (car.y - prevY_) * alpha;
     viewZ_ = prevZ_ + (car.z - prevZ_) * alpha;
-    float dyaw = car.yaw - prevYaw_;
-    while (dyaw > 3.14159265f) dyaw -= 6.2831853f;
-    while (dyaw < -3.14159265f) dyaw += 6.2831853f;
-    viewYaw_ = prevYaw_ + dyaw * alpha;
+    viewYaw_ = prevYaw_ + wrapAngle(car.yaw - prevYaw_) * alpha;
     viewSlip_ = prevSlip_ + (car.slipAngle - prevSlip_) * alpha;
     viewReady_ = true;
+
+    // 対戦相手も同じ端数で補間する。
+    for (Rival& rival : app.rivals()) {
+        const Car& rc = rival.car;
+        const float rdx = rc.x - rival.prevX;
+        const float rdz = rc.z - rival.prevZ;
+        const float a = (rdx * rdx + rdz * rdz > 400.0f) ? 1.0f : alpha;
+        rival.viewX = rival.prevX + rdx * a;
+        rival.viewY = rival.prevY + (rc.y - rival.prevY) * a;
+        rival.viewZ = rival.prevZ + rdz * a;
+        rival.viewYaw = rival.prevYaw + wrapAngle(rc.yaw - rival.prevYaw) * a;
+    }
+}
+
+// ============================================================================
+// 対戦相手
+// ============================================================================
+
+void RaceScene::stepRivals(float dt) {
+    Game& app = game_;
+    std::vector<Rival>& rivals = app.rivals();
+    if (rivals.empty()) {
+        return;
+    }
+    // 追い越し判断に使う「ほかの車」の一覧 (プレイヤーを含む)。
+    std::vector<AiTraffic> traffic;
+    traffic.push_back({app.car().x, app.car().z, app.car().ground.s});
+    for (const Rival& r : rivals) traffic.push_back({r.car.x, r.car.z, r.car.ground.s});
+
+    for (size_t i = 0; i < rivals.size(); ++i) {
+        Rival& rival = rivals[i];
+        std::vector<AiTraffic> others = traffic;
+        others.erase(others.begin() + long(i) + 1);  // 自分を除く
+        DriveInput input = rival.driver.drive(rival.car, app.track(), dt, others);
+        if (rival.race.counting()) {
+            input = DriveInput{};  // カウントダウン中はプレイヤーと同じく動けない
+        }
+        rival.prevX = rival.car.x;
+        rival.prevY = rival.car.y;
+        rival.prevZ = rival.car.z;
+        rival.prevYaw = rival.car.yaw;
+        rival.car.update(dt, input, app.track());
+        rival.race.tick(rival.car.ground.s, app.track().length, dt);
+    }
+}
+
+void RaceScene::resolveContacts() {
+    // 車同士の接触: 車体を前後 2 つの円で近似し、重なった分だけ押し離す。
+    // 後ろからぶつかった側は少し減速する (追突で前の車を押し出さないように)。
+    constexpr float kRadius = 0.95f;   // 円の半径 (m)
+    constexpr float kOffset = 1.15f;   // 円の中心の前後位置 (m)
+    Game& app = game_;
+    std::vector<Car*> cars;
+    cars.push_back(&app.car());
+    for (Rival& r : app.rivals()) cars.push_back(&r.car);
+    if (cars.size() < 2) {
+        return;
+    }
+    for (size_t a = 0; a < cars.size(); ++a) {
+        for (size_t b = a + 1; b < cars.size(); ++b) {
+            Car& ca = *cars[a];
+            Car& cb = *cars[b];
+            const float cdx = ca.x - cb.x;
+            const float cdz = ca.z - cb.z;
+            if (cdx * cdx + cdz * cdz > 36.0f) continue;  // 6m 以上離れていれば調べない
+            // 4 組の円のうち、最も深く重なっている組で押し離す。
+            float bestPen = 0.0f, nx = 0.0f, nz = 0.0f;
+            for (int i = -1; i <= 1; i += 2) {
+                for (int j = -1; j <= 1; j += 2) {
+                    const float ax = ca.x + std::sin(ca.yaw) * kOffset * float(i);
+                    const float az = ca.z + std::cos(ca.yaw) * kOffset * float(i);
+                    const float bx = cb.x + std::sin(cb.yaw) * kOffset * float(j);
+                    const float bz = cb.z + std::cos(cb.yaw) * kOffset * float(j);
+                    const float d = std::hypot(ax - bx, az - bz);
+                    const float pen = 2.0f * kRadius - d;
+                    if (pen > bestPen && d > 1e-4f) {
+                        bestPen = pen;
+                        nx = (ax - bx) / d;
+                        nz = (az - bz) / d;
+                    }
+                }
+            }
+            if (bestPen <= 0.0f) continue;
+            ca.x += nx * bestPen * 0.5f;
+            ca.z += nz * bestPen * 0.5f;
+            cb.x -= nx * bestPen * 0.5f;
+            cb.z -= nz * bestPen * 0.5f;
+            // 後ろ側 (相手の方へ向かって進んでいる車) を少し減速させる。
+            Car& rear = (std::sin(ca.yaw) * -nx + std::cos(ca.yaw) * -nz) > 0.0f ? ca : cb;
+            rear.speed *= 0.985f;
+            rear.velX *= 0.985f;
+            rear.velZ *= 0.985f;
+        }
+    }
 }
 
 void RaceScene::updateCamera(float elapsed) {
@@ -400,6 +508,7 @@ void RaceScene::draw() {
     Game& app = game_;
     app.beginWorldDraw();
     app.drawWorld({viewX_, viewY_, viewZ_}, viewYaw_);
+    app.drawRivals(true);
     app.drawGhost();
     app.drawEffects();
     if (app.diagMirror()) {

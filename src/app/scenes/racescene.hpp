@@ -34,6 +34,10 @@ private:
     DriveInput readDriveInput(DriveInput& raw, bool& resetRequested);
     // 物理を固定ステップで進め、描画用の補間ポーズを更新する。
     void stepPhysics(double elapsed, const DriveInput& input);
+    // 対戦相手を 1 物理ステップ進める (AI の運転 → 物理 → 周回)。
+    void stepRivals(float dt);
+    // 車同士の重なりを押し離す。
+    void resolveContacts();
     // カメラの追従。
     void updateCamera(float elapsed);
     // カウントダウンの数字の切り替わりと GO を検出する。

@@ -20,6 +20,8 @@
 #include "tuning.hpp"  // parseTuning / kTuningStorageKey (外部変更の反映用)
 #include "ranking.hpp"  // kRankingStorageKey
 #include "audio.hpp"     // createAudio / destroyAudio
+#include "racerecord.hpp"     // kRecordStorageKey / kPlayerNameStorageKey
+#include "recordservice.hpp"  // createRecordService / destroyRecordService
 
 #include <SDL.h>
 #include <SDL_image.h>
@@ -72,6 +74,7 @@ SDL_Window* gWindow = nullptr;
 SDL_GLContext gGl = nullptr;
 IRenderer* gRenderer = nullptr;  // Game へ差し込んだ描画実装 (所有はこの層)
 IAudio* gAudio = nullptr;        // Game へ差し込んだ音声実装 (所有はこの層)
+IRecordService* gRecords = nullptr;  // 走行記録のオンライン共有 (所有はこの層)
 
 }  // namespace
 
@@ -263,10 +266,36 @@ bool createWindow(Game& app) {
     app.setSaveTuningSink([](const std::string& text) {
         saveSetting(kTuningStorageKey, text);
     });
+    // 走行記録 (学習・対戦相手の一覧) の保存口と復元、オンライン共有の実装。
+    app.setRecordsSink([](const std::string& text) { saveSetting(kRecordStorageKey, text); });
+    {
+        std::string savedRecords;
+        if (loadSetting(kRecordStorageKey, savedRecords)) {
+            app.setRecordsText(savedRecords);
+        }
+    }
+    // 動作確認用の自動運転 (ブラウザは ?autopilot=1)。
+    if (urlQueryParam("autopilot") == "1") {
+        app.setAutopilot(true);
+    }
+    gRecords = createRecordService();
+    app.installRecordService(gRecords);
+    // プレイヤー名: ブラウザはページの入力欄 (localStorage)、ネイティブは設定
+    // ファイル (--name で保存できる)。レースのたびに読み直すので変更がすぐ効く。
+    app.setPlayerNameSource([]() {
+        std::string name;
+        loadSetting(kPlayerNameStorageKey, name);
+        return name;
+    });
     return true;
 }
 
 void destroyWindow(Game& app) {
+    if (gRecords) {
+        app.installRecordService(nullptr);
+        destroyRecordService(gRecords);
+        gRecords = nullptr;
+    }
     if (gAudio) {
         destroyAudio(gAudio);
         gAudio = nullptr;
