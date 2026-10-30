@@ -63,7 +63,7 @@
 <header>
   <h1>ドリフトレース（仮）</h1>
   <p>C++ / SDL2 / WebAssembly — ブラウザでそのまま遊べます。画面をクリックしてから操作してください。</p>
-  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-29 · SOUND FIX 2</p>
+  <p style="margin-top:2px; font-size:11.5px; letter-spacing:.18em; opacity:.65;">BUILD 2026-10-30 · SOUND ENGINE 2</p>
 </header>
 
 <div id="wrap">
@@ -130,43 +130,18 @@
 </script>
 <script async src="racegame.js"></script>
 <script>
-// 音声の自動再生制限対策と状態表示。ブラウザはユーザー操作があるまで
-// AudioContext を止めたままにする。SDL はキー/マウスで再開するが、
-// ゲームパッドだけだと操作として数えられず無音になることがあるため、
-// パッドのボタンも含めてあらゆる入力で再開を試み、状態を表示する。
+// 音声の状態表示。自動再生制限の解除 (クリック・キー・タッチ・パッドで
+// AudioContext を再開) とタブ切替時の一時停止はゲーム本体 (audio.cpp) が
+// 行うので、ページ側は状態を表示するだけでよい。
 (function () {
-  function audioContext() {
-    var paths = [];
-    try { if (window.Module && Module.SDL2) { paths.push(Module.SDL2.audioContext); } } catch (e) {}
-    try { if (window.SDL2) { paths.push(SDL2.audioContext); } } catch (e) {}
-    try { if (window.Module && Module.SDL) { paths.push(Module.SDL.audioContext, Module.SDL.audio && Module.SDL.audio.audioContext); } } catch (e) {}
-    try { if (window.SDL) { paths.push(SDL.audioContext, SDL.audio && SDL.audio.audioContext); } } catch (e) {}
-    for (var i = 0; i < paths.length; i++) { if (paths[i]) return paths[i]; }
-    return null;
-  }
-  function resume() {
-    var ctx = audioContext();
-    if (ctx && ctx.state === 'suspended') { ctx.resume(); }
-  }
-  ['pointerdown', 'keydown', 'touchstart', 'mousedown'].forEach(function (ev) {
-    window.addEventListener(ev, resume, true);
-  });
   var el = document.getElementById('audioState');
+  if (!el) return;
+  var labels = { running: '再生中', suspended: 'クリックまたはキー操作で音が出ます', closed: '停止' };
   setInterval(function () {
-    try {
-      var pads = navigator.getGamepads ? navigator.getGamepads() : [];
-      for (var i = 0; i < pads.length; i++) {
-        var p = pads[i];
-        if (!p) continue;
-        for (var j = 0; j < p.buttons.length; j++) {
-          if (p.buttons[j].pressed) { resume(); break; }
-        }
-      }
-    } catch (e) {}
-    if (el) {
-      var ctx = audioContext();
-      el.textContent = 'AUDIO: ' + (ctx ? ctx.state : 'no-context');
-    }
+    var sdl = window.Module && Module.SDL2;
+    var ctx = sdl && sdl.audioContext;
+    var state = ctx ? ctx.state : 'loading';
+    el.textContent = 'AUDIO: ' + (labels[state] || '準備中');
   }, 300);
 })();
 </script>

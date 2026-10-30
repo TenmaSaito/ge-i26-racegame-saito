@@ -1,24 +1,35 @@
 #pragma once
 // ============================================================================
 // audio.hpp ― 音声ポート (IAudio)
-// 役割: アプリケーション層が「音の状態」だけを伝え、再生の実務
-//       (SDL_mixer、波形生成) はプラットフォーム層に閉じるための口。
-//       今は仮のタイヤスリップ音だけだが、エンジン音や衝突音も
-//       ここへ足していく想定。
+// 役割: アプリケーション層は「音の状態」(soundparams.hpp) だけを伝え、
+//       音の合成 (SoundMixer) と出力デバイスの扱いは外側に任せるための口。
+//       ゲーム側はどのプラットフォームで鳴っているかを知らない。
+//
+//   アプリ層 (racescene) ──EngineSound / TireSound / SoundCue──▶ IAudio
+//                                                                 │
+//   platform 層 (audio.cpp): SDL の音声デバイス ◀── SoundMixer (domain/sound)
+//
+// どの関数も「音が出せない環境では黙って何もしない」のが契約。
 // ============================================================================
+
+#include "soundparams.hpp"
 
 #include <string>
 
-// 音声の差し込み口。実装は platform 層 (createAudio が返す)。
 struct IAudio {
     virtual ~IAudio() = default;
-    // ドリフト音の強さ (0..1)。ドリフトの強さで音量が変わる。
-    // 毎フレーム呼んでよい (変化がなければ内部で何もしない)。
-    virtual void setSlip(float amount) = 0;
-    // エンジン音。rpm (0..1) で音程の段が、load (0..1) で音量が変わる。
-    // 両方 0 で停止 (レース外の合図)。毎フレーム呼んでよい。
-    virtual void setEngine(float rpm, float load) = 0;
-    // 診断用: 素材が読めたか・鳴っているかを短い文字列で返す (デバッグ表示用)。
+
+    // エンジン音の状態。毎フレーム呼んでよい (音声側で滑らかにつなぐ)。
+    virtual void setEngine(const EngineSound& state) = 0;
+    // タイヤ (ドリフト) 音の状態。毎フレーム呼んでよい。
+    virtual void setTires(const TireSound& state) = 0;
+    // 単発の効果音を鳴らす。
+    virtual void playCue(SoundCue cue) = 0;
+
+    // ブラウザの自動再生制限などで、まだ音が出せない状態なら true。
+    // (画面に「クリックで音が出ます」と案内するために使う)
+    virtual bool waitingForUserGesture() const = 0;
+    // 診断用: 素材の読み込み可否・再生状態を短い文字列で返す (デバッグ表示用)。
     virtual std::string diag() const = 0;
 };
 

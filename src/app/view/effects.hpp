@@ -13,7 +13,7 @@
 
 #include <vector>
 
-class Car;          // 車の状態 (読むだけ)
+struct Car;          // 車の状態 (読むだけ)
 struct Orbit;       // カメラ状態 (煙のビルボード用)
 struct IRenderer;   // 描画ポート
 

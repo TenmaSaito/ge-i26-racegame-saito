@@ -11,7 +11,7 @@
 
 #include <vector>
 
-class Car;
+struct Car;
 
 class Ghost {
 public:

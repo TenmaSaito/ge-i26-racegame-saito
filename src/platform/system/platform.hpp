@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-struct Game;
+class Game;
 struct Track;  // コース実体 (track.hpp)。loadTrack の引数用
 
 namespace platform {

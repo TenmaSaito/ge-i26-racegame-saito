@@ -6,7 +6,7 @@
 
 namespace {
 
-constexpr float kMaxSpeed = 82.0f;      // 約 295 km/h
+constexpr float kMaxSpeed = kCarMaxSpeed;  // 約 295 km/h (car.hpp で公開)
 constexpr float kMaxReverse = 9.0f;
 constexpr float kAccel = 13.0f;
 constexpr float kBrake = 30.0f;

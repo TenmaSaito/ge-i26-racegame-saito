@@ -24,6 +24,9 @@ public:
 
 private:
     void drawMinimap(Game& app);       // コース全体図と自車マーカー
+    void drawCountdown(Game& app);     // スタートシグナル (ランプ) と 3・2・1 / GO!
+    void drawTachometer(Game& app);    // ギアと回転数のバー (右下)
+    void drawSoundHint(Game& app, float x, float y);  // 「クリックで音が出ます」の案内
     void drawDriftDebug(Game& app);    // ドリフト状態の内訳 (ネイティブのみ)
     void drawTuning(Game& app);        // チューニングパネル (T キー)
     void sendDebugToPage(Game& app);   // ブラウザ版: ページ側パネルへ送る
@@ -32,4 +35,5 @@ private:
     // 走査して求め、以降は使い回す (毎フレームの全数走査を避けるため)。
     float mmMinX_ = 0, mmMaxX_ = 0, mmMinZ_ = 0, mmMaxZ_ = 0;
     bool mmReady_ = false;
+    float hintBlink_ = 0;  // 音の案内の点滅用タイマー (秒)
 };

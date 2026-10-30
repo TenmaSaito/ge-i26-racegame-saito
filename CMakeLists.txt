@@ -34,12 +34,17 @@ message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 #   tuning.cpp   ドリフト調整値（表と保存形式）
 #   carmodel.cpp 車体モデル（追加形状と車種）
 #   car/track/scenery/render  ロジックと描画（SDL 非依存を維持）
+#   enginesim.cpp エンジン回転数とギア（音と HUD 用のモデル）
+#   sound/*      音の合成（WAV 読み込み・ループ加工・ミキサー。SDL 非依存）
+#   audio.cpp    音声デバイスとの接続（SDL2 の音声 API）
 #   selftest.cpp 自己検証（--self-test）
-# 依存ライブラリは SDL 系のみ（SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer）。
+# 依存ライブラリは SDL 系のみ（SDL2 本体＋テクスチャ用 SDL_image）。
+# 音は SDL2 本体の音声デバイスへ自前のミキサーで書くので SDL_mixer は不要。
 add_executable(racegame
     src/platform/entry/main.cpp
     src/platform/system/platform.cpp
     src/platform/render/render.cpp
+    src/platform/render/glapi.cpp
     src/platform/audio/audio.cpp
     src/platform/input/input.cpp
     src/platform/test/selftest.cpp
@@ -57,16 +62,19 @@ add_executable(racegame
     src/app/race/ghost.cpp
     src/app/race/ranking.cpp
     src/app/vehicle/carmodel.cpp
+    src/app/vehicle/enginesim.cpp
     src/domain/vehicle/car.cpp
     src/domain/course/track.cpp
     src/domain/scenery/scenery.cpp
     src/domain/tuning/tuning.cpp
+    src/domain/sound/pcm.cpp
+    src/domain/sound/soundmixer.cpp
 )
 # フォルダ分け (domain/app/ports/platform) に対して include パスを通す。
 # これにより #include "car.hpp" のような素の名前のまま相互参照できる。
 target_include_directories(racegame PRIVATE
     src/domain/math src/domain/vehicle src/domain/course src/domain/scenery
-    src/domain/tuning
+    src/domain/tuning src/domain/sound
     src/app/core src/app/scenes src/app/view src/app/race src/app/vehicle
     src/ports
     src/platform/entry src/platform/system src/platform/render
@@ -95,8 +103,6 @@ if(EMSCRIPTEN)
         "-sUSE_SDL=2"
         "-sUSE_SDL_IMAGE=2"
         "-sSDL2_IMAGE_FORMATS=['png']"
-        "-sUSE_SDL_MIXER=2"
-        "-sSDL2_MIXER_FORMATS=['ogg']"
     )
 
     set(DEBUG_INFO_FORMAT "DWARF" CACHE STRING "Debug info format for Debug builds (DWARF or SOURCE_MAP)")
@@ -153,16 +159,30 @@ if(EMSCRIPTEN)
 else()
     message(STATUS "TARGET_PLATFORM=Native (${CMAKE_SYSTEM_NAME})")
 
-    find_package(PkgConfig REQUIRED)
     find_package(OpenGL REQUIRED)
-    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
-    pkg_check_modules(SDL2_IMAGE REQUIRED IMPORTED_TARGET SDL2_image)
-    pkg_check_modules(SDL2_MIXER REQUIRED IMPORTED_TARGET SDL2_mixer)
+
+    # SDL2 / SDL2_image の探し方は 2 通り:
+    #   1. CMake パッケージ (Windows の vcpkg や公式 devel 版、Android の SDL ソース同梱)
+    #   2. pkg-config (Linux のディストリビューション版)
+    # 先に 1 を試し、見つからなければ 2 に落ちる。どちらでも同じターゲット名で扱う。
+    find_package(SDL2 CONFIG QUIET)
+    find_package(SDL2_image CONFIG QUIET)
+    if(TARGET SDL2::SDL2 AND TARGET SDL2_image::SDL2_image)
+        message(STATUS "SDL2: CMake パッケージを使用")
+        set(RACEGAME_SDL_LIBS SDL2::SDL2 SDL2_image::SDL2_image)
+        if(TARGET SDL2::SDL2main)
+            list(PREPEND RACEGAME_SDL_LIBS SDL2::SDL2main)  # Windows の WinMain 用
+        endif()
+    else()
+        message(STATUS "SDL2: pkg-config を使用")
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+        pkg_check_modules(SDL2_IMAGE REQUIRED IMPORTED_TARGET SDL2_image)
+        set(RACEGAME_SDL_LIBS PkgConfig::SDL2 PkgConfig::SDL2_IMAGE)
+    endif()
 
     target_link_libraries(racegame PRIVATE
-        PkgConfig::SDL2
-        PkgConfig::SDL2_IMAGE
-        PkgConfig::SDL2_MIXER
+        ${RACEGAME_SDL_LIBS}
         OpenGL::GL
     )
 
@@ -175,6 +195,18 @@ else()
                 "${ASSETS_DIR}" "$<TARGET_FILE_DIR:racegame>/assets"
         COMMENT "assets/ を実行ファイルの隣にコピー"
     )
+
+    # 音作りの確認ツール (ゲームには含まれない)。走行の台本を鳴らして WAV に書き出す。
+    # SDL を使わずに動くので、ミキサーがプラットフォーム非依存であることの確認も兼ねる。
+    #   cmake --build build-native --target sounddemo
+    #   ./build-native/sounddemo assets/sound sound_demo.wav
+    add_executable(sounddemo EXCLUDE_FROM_ALL
+        tools/sounddemo/sounddemo.cpp
+        src/app/vehicle/enginesim.cpp
+        src/domain/sound/pcm.cpp
+        src/domain/sound/soundmixer.cpp
+    )
+    target_include_directories(sounddemo PRIVATE src/domain/sound src/app/vehicle)
 
     install(TARGETS racegame DESTINATION .)
     install(DIRECTORY "${ASSETS_DIR}" DESTINATION .)

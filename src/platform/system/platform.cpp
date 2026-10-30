@@ -8,8 +8,8 @@
 //       を知ってよいが、内側はこの層を直接知らない (ポート経由)。
 // Android への移植: SDL が Android でも同じ API を提供するため、
 //       このファイルは原則そのまま使える（アセット読み込みは SDL_RWops）。
-// 依存: SDL2 本体＋テクスチャ用 SDL_image＋音声用 SDL_mixer
-//       (いずれも SDL 公式の姉妹ライブラリで Android 対応)。
+// 依存: SDL2 本体＋テクスチャ用 SDL_image (どちらも Android / Windows 対応)。
+//       音声は SDL2 本体の音声デバイスを audio.cpp が直接使う。
 // ============================================================================
 
 #include "platform.hpp"
@@ -23,7 +23,6 @@
 
 #include <SDL.h>
 #include <SDL_image.h>
-#include <SDL_mixer.h>
 
 #include <cstdio>
 #include <fstream>
@@ -210,13 +209,10 @@ bool createWindow(Game& app) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
-    // テクスチャ (PNG) と音声 (OGG) の土台だけ先に用意しておく。
-    // 読み込み自体は今後の実装で platform の読み込み口から行う。
+    // テクスチャ (PNG) の土台だけ先に用意しておく。
+    // 音声デバイスは createAudio (audio.cpp) が自分で開く。
     if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0) {
         SDL_Log("IMG_Init failed: %s", IMG_GetError());
-    }
-    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) != 0) {
-        SDL_Log("Mix_OpenAudio failed: %s", Mix_GetError());
     }
 #ifdef __EMSCRIPTEN__
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
@@ -282,8 +278,6 @@ void destroyWindow(Game& app) {
         gRenderer = nullptr;
         app.installRenderer(nullptr);
     }
-    Mix_CloseAudio();
-    Mix_Quit();
     IMG_Quit();
     if (gGl) {
         SDL_GL_DeleteContext(gGl);

@@ -17,6 +17,7 @@
 #include "render.hpp"   // IRenderer (ポート), GpuMesh
 #include "object.hpp"   // ObjectManager (オブジェクト一括管理)
 #include "audio.hpp"    // IAudio (音声ポート)
+#include "enginesim.hpp"  // EngineSim (エンジン回転数・ギア)
 #include "ghost.hpp"    // Ghost (前回の自分のゴースト)
 #include "ranking.hpp"  // Ranking (ローカルランキング)
 
@@ -100,16 +101,30 @@ public:
     void setDiagTilt(bool on) { diagTilt_ = on; }
     bool diagMirror() const { return diagMirror_; }
     void setDiagMirror(bool on) { diagMirror_ = on; }
-    // タイヤスリップ音の強さを音声実装へ伝える (シーンから毎フレーム)。
-    void setSlip(float amount) {
-        if (audio_) audio_->setSlip(amount);
+    // --- 音 (実装が差し込まれていなければ何もしない) ---
+    // エンジン音・タイヤ音の状態を音声実装へ伝える (シーンから毎フレーム)。
+    void setEngineSound(const EngineSound& state) {
+        if (audio_) audio_->setEngine(state);
     }
-    // エンジン音の状態を音声実装へ伝える (rpm=音程の段、load=音量)。
-    void setEngine(float rpm, float load) {
-        if (audio_) audio_->setEngine(rpm, load);
+    void setTireSound(const TireSound& state) {
+        if (audio_) audio_->setTires(state);
     }
+    // エンジン音とタイヤ音を止める (フェードアウト)。レース外のシーンで使う。
+    void silenceAudio() {
+        setEngineSound(EngineSound{});
+        setTireSound(TireSound{});
+    }
+    // 単発の効果音 (カウントダウンの合図など)。
+    void playCue(SoundCue cue) {
+        if (audio_) audio_->playCue(cue);
+    }
+    // ブラウザの自動再生制限で、まだ音が出せないか (画面で案内するため)。
+    bool audioWaitingForGesture() const { return audio_ && audio_->waitingForUserGesture(); }
     // 音声の診断文字列 (デバッグ表示用)。
     std::string audioDiag() const { return audio_ ? audio_->diag() : std::string("AUDIO NONE"); }
+    // エンジン回転数のモデル (音の音程と HUD のギア表示が共有する)。
+    EngineSim& engine() { return engine_; }
+    const EngineSim& engine() const { return engine_; }
     const Ghost& ghost() const { return ghost_; }
     // ゴーストを半透明で描く (計測中で保存済みがあるときだけ実働)。
     void drawGhost();
@@ -183,6 +198,7 @@ private:
     SceneryBuilder sceneryBuilder_{track_};  // 地形の高さを引くために保持する
     Car car_;            // 自車
     Race race_;          // 周回・計時
+    EngineSim engine_;   // エンジン回転数とギア (音と HUD 用)
     Orbit camera_;       // カメラ状態
     Effects effects_;    // 煙・光跡・タイヤ痕
     ObjectManager objects_;         // 全オブジェクトの一括管理 (景観・Player)

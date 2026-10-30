@@ -21,6 +21,7 @@
 #include "scenery.hpp"   // SceneryBuilder
 #include "tuning.hpp"    // tuneItems / serializeTuning
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -35,6 +36,8 @@ void Game::resetRace() {
     car_.reset(track_);
     race_.reset();
     race_.startCountdown();  // 3・2・1 の後にスタート
+    // エンジンはアイドルから。ギア比の基準は車種ごとの実際の最高速。
+    engine_.reset(std::min(kCarMaxSpeed, kCarMaxSpeed * car_.topSpeedMul));
     camera_.ready = false;  // カメラは次のフレームで即座に置き直す
     effects_.clear();       // 煙・光跡・タイヤ痕も残さない
     ghost_.discard();       // 記録中ラップは捨てる (保存済みゴーストは残す)

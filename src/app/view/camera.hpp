@@ -8,7 +8,7 @@
 
 #include "geom.hpp"
 
-class Track;  // 路面クエリ用 (前方宣言)
+struct Track;  // 路面クエリ用 (前方宣言)
 
 // カメラの状態と位置決め。eye (目の位置) と look (注視点) を毎フレーム決める。
 struct Orbit {

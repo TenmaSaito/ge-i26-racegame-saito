@@ -1,19 +1,12 @@
 #include "render.hpp"
 
+#include "glapi.hpp"  // gl 関数の入手口 (環境ごとの差はここで吸収)
+
 #include <SDL.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-
-#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
-// ブラウザ (WebGL2) と Android は OpenGL ES 3 が共通の土台。
-#include <GLES3/gl3.h>
-#else
-#define GL_GLEXT_PROTOTYPES 1
-#include <GL/gl.h>
-#include <GL/glext.h>
-#endif
 
 namespace {
 
@@ -230,6 +223,9 @@ struct GlRenderer final : IRenderer {
 };
 
 bool GlRenderer::init() {
+    if (!loadGlFunctions()) {
+        return false;  // Windows で GL 3.3 の関数が取れない (ドライバが古い等)
+    }
     glGenVertexArrays(1, &dummyVao);
     worldProgram = linkProgram(kWorldVs, kWorldFs);
     skyProgram = linkProgram(kSkyVs, kSkyFs);

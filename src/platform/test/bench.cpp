@@ -153,5 +153,7 @@ int runBenchmark(Game& app, const char* mode) {
     std::printf("bench mode=%s\n", mode);
     stat(all, "  all  ");
     stat(drift, "  drift");
+    // 音声デバイスの状態 (開けたか・素材を読めたか・最後の音量)。
+    std::printf("  audio: %s\n", app.audioDiag().c_str());
     return 0;
 }
