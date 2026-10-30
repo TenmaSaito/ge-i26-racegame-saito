@@ -50,7 +50,7 @@ bool toInt(const std::string& s, int& out) {
 // コースごとに速い順へ並べ、上限件数を超えた分を捨てる。
 void trimPerCourse(std::vector<RaceRecord>& list, size_t perCourse) {
     std::stable_sort(list.begin(), list.end(), [](const RaceRecord& a, const RaceRecord& b) {
-        return a.course != b.course ? a.course < b.course : a.total < b.total;
+        return a.course != b.course ? a.course < b.course : a.bestLap < b.bestLap;
     });
     std::vector<RaceRecord> kept;
     size_t run = 0;
@@ -85,7 +85,8 @@ std::string RaceRecord::serialize() const {
     std::ostringstream ss;
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.3f|%.3f", total, bestLap);
-    ss << "R1|" << sanitizeName(name) << '|' << course << '|' << car << '|' << level << '|' << buf << '|';
+    ss << "R2|" << sanitizeName(name) << '|' << course << '|' << car << '|' << level << '|' << laps << '|' << buf
+       << '|';
     for (size_t i = 0; i < profile.size(); ++i) {
         std::snprintf(buf, sizeof(buf), "%.1f", profile[i]);
         ss << (i ? "," : "") << buf;
@@ -94,18 +95,21 @@ std::string RaceRecord::serialize() const {
 }
 
 bool RaceRecord::parse(const std::string& line, RaceRecord& out) {
-    const std::vector<std::string> f = split(line, '|');
-    if (f.size() != 8 || f[0] != "R1") {
+    std::vector<std::string> f = split(line, '|');
+    RaceRecord r;
+    if (f.size() == 8 && f[0] == "R1") {
+        f.insert(f.begin() + 5, "3");  // 旧形式は 3 周固定だった
+    } else if (f.size() != 9 || f[0] != "R2") {
         return false;
     }
-    RaceRecord r;
     r.name = sanitizeName(f[1], "");
     r.course = sanitizeName(f[2], "");
     for (char& c : r.course) c = char(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);  // stem は小文字
-    if (!toInt(f[3], r.car) || !toInt(f[4], r.level) || !toFloat(f[5], r.total) || !toFloat(f[6], r.bestLap)) {
+    if (!toInt(f[3], r.car) || !toInt(f[4], r.level) || !toInt(f[5], r.laps) || !toFloat(f[6], r.total) ||
+        !toFloat(f[7], r.bestLap)) {
         return false;
     }
-    for (const std::string& v : split(f[7], ',')) {
+    for (const std::string& v : split(f[8], ',')) {
         float speed;
         if (!toFloat(v, speed)) return false;
         r.profile.push_back(speed);
@@ -119,7 +123,8 @@ bool RaceRecord::parse(const std::string& line, RaceRecord& out) {
 
 bool RaceRecord::valid() const {
     if (name.empty() || course.empty() || car < 0 || car > 2 || level < -1 || level > 2) return false;
-    if (!(total > 0.0f && total < 7200.0f && bestLap > 0.0f && bestLap <= total)) return false;
+    if (laps < 1 || laps > 20) return false;
+    if (!(total > 0.0f && total < 36000.0f && bestLap > 0.0f && bestLap <= total)) return false;
     if (profile.size() != size_t(kProfileBins)) return false;
     for (float v : profile) {
         if (!(v >= 0.0f && v <= 120.0f)) return false;
@@ -184,7 +189,7 @@ void RecordBook::addOwn(const RaceRecord& record) {
 int RecordBook::addShared(const RaceRecord& record) {
     if (!record.valid()) return 0;
     for (const RaceRecord& r : shared_) {
-        if (r.course == record.course && r.name == record.name && std::fabs(r.total - record.total) < 0.001f) {
+        if (r.course == record.course && r.name == record.name && std::fabs(r.bestLap - record.bestLap) < 0.001f) {
             return 0;  // 同じ記録
         }
     }
@@ -205,7 +210,8 @@ std::vector<float> RecordBook::learnedProfile(const std::string& course) const {
     for (const RaceRecord& r : own_) if (r.course == course) pool.push_back(&r);
     for (const RaceRecord& r : shared_) if (r.course == course) pool.push_back(&r);
     if (pool.empty()) return {};
-    std::sort(pool.begin(), pool.end(), [](const RaceRecord* a, const RaceRecord* b) { return a->total < b->total; });
+    std::sort(pool.begin(), pool.end(),
+              [](const RaceRecord* a, const RaceRecord* b) { return a->bestLap < b->bestLap; });
     const size_t use = std::min<size_t>(5, pool.size());
     std::vector<float> out(kProfileBins, 0.0f);
     float weightSum = 0.0f;
@@ -220,10 +226,10 @@ std::vector<float> RecordBook::learnedProfile(const std::string& course) const {
 
 std::vector<RaceRecord> RecordBook::pickRivalModels(const std::string& course, const std::string& self,
                                                    int count) const {
-    // 自分のベスト (無ければ中央値) に近い速さの人から選ぶ。同じ人は 1 回だけ。
+    // 自分のベストラップ (無ければ中央値) に近い速さの人から選ぶ。同じ人は 1 回だけ。
     float reference = -1.0f;
     for (const RaceRecord& r : own_) {
-        if (r.course == course && (reference < 0.0f || r.total < reference)) reference = r.total;
+        if (r.course == course && (reference < 0.0f || r.bestLap < reference)) reference = r.bestLap;
     }
     std::vector<const RaceRecord*> pool;
     for (const RaceRecord& r : shared_) {
@@ -232,12 +238,12 @@ std::vector<RaceRecord> RecordBook::pickRivalModels(const std::string& course, c
     if (pool.empty() || count <= 0) return {};
     if (reference < 0.0f) {
         std::vector<float> totals;
-        for (const RaceRecord* r : pool) totals.push_back(r->total);
+        for (const RaceRecord* r : pool) totals.push_back(r->bestLap);
         std::nth_element(totals.begin(), totals.begin() + long(totals.size() / 2), totals.end());
         reference = totals[totals.size() / 2];
     }
     std::sort(pool.begin(), pool.end(), [&](const RaceRecord* a, const RaceRecord* b) {
-        return std::fabs(a->total - reference) < std::fabs(b->total - reference);
+        return std::fabs(a->bestLap - reference) < std::fabs(b->bestLap - reference);
     });
     std::vector<RaceRecord> out;
     for (const RaceRecord* r : pool) {

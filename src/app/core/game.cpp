@@ -42,6 +42,7 @@ void Game::resetRace() {
     effects_.clear();       // 煙・光跡・タイヤ痕も残さない
     ghost_.discard();       // 記録中ラップは捨てる (保存済みゴーストは残す)
     profileRecorder_.reset(track_.length);  // 区間速度の記録もやり直す
+    viewPoseValid_ = false;  // 描画用ポーズは次のレースフレームで設定される
     setupRivals();          // 対戦相手をグリッドへ並べ直す
 }
 
@@ -117,6 +118,10 @@ void Game::init() {
         lampMesh.indices.clear();
         buildTailLamps(lampMesh, {2.6f, 0.22f, 0.20f});
         lampsBright_ = renderer_->upload(lampMesh);
+        lampMesh.vertices.clear();
+        lampMesh.indices.clear();
+        buildHeadLamps(lampMesh, {2.4f, 2.3f, 2.0f});
+        headLamps_ = renderer_->upload(lampMesh);
     rebuildCarMeshes();
     // 初期コースの読み込み (失敗したら既定コースへ落とす)。
     if (!loadCourse(initialStem_)) {
@@ -171,10 +176,10 @@ bool Game::loadCourse(const std::string& stem) {
 // 対戦相手の一覧 (これまで戦った人数)。記録はオンラインへも共有する。
 int Game::recordResult() {
     lastOutcome_ = RaceOutcome{};
-    if (race_.completed() < kRaceLaps || race_.total() <= 0) {
-        return -1;
+    if (laps_ <= 0 || race_.completed() < laps_ || race_.total() <= 0) {
+        return -1;  // フリー走行や途中終了は記録しない
     }
-    int rank = ranking_.addResult(courseStem_, race_.total());
+    int rank = ranking_.addResult(rankingKey(courseStem_, laps_), race_.total());
     if (rankingSink_) {
         rankingSink_(ranking_.serialize());
     }
@@ -192,6 +197,7 @@ int Game::recordResult() {
     record.course = courseStem_;
     record.car = carSpec_;
     record.level = rivals_.empty() ? -1 : int(aiLevel_);
+    record.laps = laps_;
     record.total = race_.total();
     record.bestLap = race_.best();
     record.profile = profileRecorder_.bestProfile();
@@ -248,6 +254,7 @@ void Game::noteFps(double elapsed) {
 // ワールド描画の開始: 画面を消し、空を描き、投影と視点を設定する。
 // 画面サイズの反映と表示 (Swap) は外側 (platform のループ) の担当。
 void Game::beginWorldDraw() {
+    applyLighting();
     renderer_->clearFrame();
     renderer_->drawSky();
     float aspect = float(renderer_->width()) /
@@ -310,11 +317,14 @@ void Game::drawWorld(Vec3 carPos, float carYaw) {
         renderer_->draw(nose_, model);
     } else {
         renderer_->draw(body_, model);
-        // テールランプ: ブレーキで強点灯、ドリフト中は点灯、それ以外は消灯色。
-        const GpuMesh& lamps = lastInput_.brake > 0.05f ? lampsBright_
-                               : car_.drifting        ? lampsOn_
-                                                      : lampsOff_;
+        // テールランプ: ブレーキで強点灯、ドリフト中と夜は点灯、それ以外は消灯色。
+        const GpuMesh& lamps = lastInput_.brake > 0.05f    ? lampsBright_
+                               : (car_.drifting || night_) ? lampsOn_
+                                                           : lampsOff_;
         renderer_->draw(lamps, model);
+        if (night_) {
+            renderer_->draw(headLamps_, model);
+        }
     }
     const float wheelX = 0.82f;
     const float wheelZ[2] = {1.42f, -1.38f};
@@ -388,6 +398,7 @@ void Game::drawMirror(Vec3 carPos, float carYaw) {
     rear.ready = true;
     rear.mode = saved.mode;
     camera_ = rear;
+    inMirror_ = true;  // 夜は明るさを上げ、後ろの車やゴーストを見やすくする
     // ミラー側は軽く: 地形 (遠景) は省き、景観も 420m までだけ描く。
     const float savedCull = cullRadius_;
     const bool savedBackdrop = drawBackdrop_;
@@ -399,6 +410,7 @@ void Game::drawMirror(Vec3 carPos, float carYaw) {
     drawGhost();                // 後ろにいるゴーストも映す
     drawRivals(false);          // 後ろの対戦相手も映す (傾きは本描画で更新済み)
     renderer_->clearViewport();
+    inMirror_ = false;
     cullRadius_ = savedCull;
     drawBackdrop_ = savedBackdrop;
     camera_ = saved;

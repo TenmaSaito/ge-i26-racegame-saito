@@ -99,14 +99,11 @@ class SdlAudio final : public IAudio {
 public:
     SdlAudio() {
         // --- 素材の読み込みとループ加工 (デバイスを開く前に済ませる) -------
-        Pcm engine, drift;
+        // ドリフト音は SoundMixer が合成するので素材は要らない。
+        Pcm engine;
         if (loadSound("engine.wav", engine)) {
             // エンジン音は全体が定常音。継ぎ目を 0.25 秒重ねて輪にする。
             mixer_.setEngineLoop(makeSeamlessLoop(engine, 0.0f, 0.25f));
-        }
-        if (loadSound("drift.wav", drift)) {
-            // ドリフト音は先頭 0.06 秒がフェードインなので捨て、0.35 秒重ねる。
-            mixer_.setTireLoop(makeSeamlessLoop(drift, 0.06f, 0.35f));
         }
 
         // --- 音声デバイスを開く --------------------------------------------
@@ -162,9 +159,8 @@ public:
     std::string diag() const override {
         char buf[128];
         const char* state = device_ == 0 ? "NO DEVICE" : (waitingForUserGesture() ? "WAIT CLICK" : "ON");
-        std::snprintf(buf, sizeof(buf), "%s %dHZ ENG %s %.2f TIRE %s %.2f", state, outRate_,
-                      mixer_.hasEngine() ? "OK" : "NG", mixer_.engineLevel(),
-                      mixer_.hasTire() ? "OK" : "NG", mixer_.tireLevel());
+        std::snprintf(buf, sizeof(buf), "%s %dHZ ENG %s %.2f TIRE %.2f", state, outRate_,
+                      mixer_.hasEngine() ? "OK" : "NG", mixer_.engineLevel(), mixer_.tireLevel());
         return buf;
     }
 

@@ -24,6 +24,14 @@ void buildTailLamps(CpuMesh& mesh, Vec3 color) {
     }
 }
 
+void buildHeadLamps(CpuMesh& mesh, Vec3 color) {
+    // 車体のヘッドライト (buildCarDetails の細い帯) を少し覆う大きさで、前へ少し出す。
+    for (int s = -1; s <= 1; s += 2) {
+        const float cx = float(s) * 0.45f;
+        mesh.addBox({cx - 0.18f, 0.38f, 2.36f}, {cx + 0.18f, 0.49f, 2.41f}, color);
+    }
+}
+
 
 
 // 車体の作り込み。本体 (buildCarBody) の上に、ガラス・空力部品・

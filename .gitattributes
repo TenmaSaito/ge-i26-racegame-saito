@@ -12,6 +12,8 @@
 *.md text eol=lf
 *.html text eol=lf
 *.js text eol=lf
+*.mjs text eol=lf
+*.toml text eol=lf
 *.css text eol=lf
 CMakeLists.txt text eol=lf
 Dockerfile text eol=lf
