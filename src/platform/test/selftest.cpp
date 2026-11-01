@@ -19,6 +19,7 @@
 #include "scenery.hpp"  // SceneryBuilder (地形) の検証用
 #include "soundmixer.hpp"  // ミキサーの検証用
 #include "track.hpp"
+#include "tiresound.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -48,10 +49,14 @@ int driftTest(const Track& track) {
     driftIn.drift = true;
     float maxSlip = 0;
     float maxLateral = 0;
+    float maxSoundDepth = 0;
+    TireSoundState tireState;
     for (int i = 0; i < 48; ++i) {  // 0.8 秒
         car.update(dt, driftIn, track);
         maxSlip = std::max(maxSlip, std::fabs(car.slipAngle));
         maxLateral = std::max(maxLateral, std::fabs(car.lateralSpeed));
+        const TireSound tire = tireState.update(car, dt, false);
+        maxSoundDepth = std::max(maxSoundDepth, tire.depth);
     }
     std::printf("drift-test: speed %.1f km/h  maxSlip %.0f deg  maxLateral %.1f m/s  score %.0f  chain %.0f m\n",
                 car.speed * 3.6f, maxSlip * 57.29578f, maxLateral, car.driftScore, car.driftChain);
@@ -63,16 +68,25 @@ int driftTest(const Track& track) {
         std::printf("drift-test: no lateral velocity\n");
         return 7;
     }
+    if (maxSoundDepth < 0.4f) {
+        std::printf("drift-test: sustained slide produced too little tire sound\n");
+        return 13;
+    }
     DriveInput calm;
     calm.throttle = 0.6f;
     for (int i = 0; i < 60 * 2; ++i) {
         car.update(dt, calm, track);
+        tireState.update(car, dt, false);
     }
     std::printf("drift-test: after release slip %.0f deg  drifting %d\n",
                 std::fabs(car.slipAngle) * 57.29578f, car.drifting ? 1 : 0);
     if (std::fabs(car.slipAngle) > 0.12f || car.drifting) {
         std::printf("drift-test: did not recover grip\n");
         return 8;
+    }
+    if (tireState.update(car, dt, false).depth > 0.01f) {
+        std::printf("drift-test: tire sound did not follow grip recovery\n");
+        return 14;
     }
     // ツインスティック単体（キーボードの A/D + 矢印、パッドの右スティック）でも
     // 滑ることを確認する。ステアは 0、ドリフトスティックだけを倒す。
@@ -182,6 +196,85 @@ float rms(const std::vector<float>& buf) {
 }  // namespace
 
 int soundTest() {
+    // 通常旋回でモデルに生じるわずかな横速度は、特に高速では大きな
+    // m/s 値になる。ドリフト入力なしで鳴き続けないことを車の物理で確認。
+    // 壁やコース形状の影響を除き、一定舵角の旋回を自由空間で再現する。
+    for (float speed : {20.0f, 40.0f, 70.0f}) {
+        Car corner;
+        corner.speed = corner.velZ = speed;
+        corner.steerAngle = maxSteerAt(speed);
+        DriveInput input;
+        input.steer = 1.0f;
+        TireSoundState cornerSound;
+        float maxDepth = 0.0f;
+        for (int i = 0; i < 120; ++i) {
+            corner.stepDrift(1.0f / 60.0f, input);
+            maxDepth = std::max(maxDepth, cornerSound.update(corner, 1.0f / 60.0f, false).depth);
+        }
+        std::printf("sound-test grip %.0f km/h slip %.1f deg depth %.4f\n",
+                    speed * 3.6f, std::fabs(corner.slipAngle) * 57.29578f, maxDepth);
+        if (corner.drifting || maxDepth > 0.01f) return 48;
+    }
+    // 閾値の前後や左右反転で深さが跳ねないことを確認する。
+    TireSoundState transition;
+    auto depthAtAngle = [&](float angle) {
+        Car c;
+        c.velZ = 20.0f;
+        c.lateralSpeed = c.velX = c.velZ * std::tan(angle);
+        c.slipAngle = angle;
+        return transition.update(c, 1.0f / 60.0f, false).depth;
+    };
+    const float lower = depthAtAngle(0.085f - 0.0001f);
+    const float lowerAbove = depthAtAngle(0.085f + 0.0001f);
+    const float mid = depthAtAngle(0.14f);
+    const float upperBelow = depthAtAngle(0.20f - 0.0001f);
+    const float upper = depthAtAngle(0.20f + 0.0001f);
+    if (lower != 0.0f || lowerAbove > 0.0001f || mid <= lowerAbove || mid >= upper ||
+        std::fabs(upper - upperBelow) > 0.001f ||
+        std::fabs(depthAtAngle(-0.14f) - mid) > 1e-5f) return 49;
+
+    // 同じ車速でも、実際の横滑りがなければドリフト操作だけでは鳴らない。
+    // 符号反転・切り返し・カウントダウン・再スタートも確認する。
+    TireSoundState tireState;
+    Car car;
+    car.drifting = true;
+    car.driftAmount = 1.0f;
+    if (tireState.update(car, 1.0f / 60.0f, false).depth != 0.0f) return 40;
+    car.velX = 1.0f;
+    car.lateralSpeed = 1.0f;
+    if (tireState.update(car, 1.0f / 60.0f, false).depth != 0.0f) return 41;
+    car.velX = 0.0f;
+    car.velZ = 20.0f;
+    car.lateralSpeed = 0.0f;
+    if (tireState.update(car, 1.0f / 60.0f, false).depth != 0.0f) return 42;
+    car.lateralSpeed = car.velX = 5.0f;
+    car.slipAngle = std::atan2(car.lateralSpeed, car.velZ);
+    const TireSound left = tireState.update(car, 0.1f, false);
+    car.lateralSpeed = car.velX = -5.0f;
+    car.slipAngle = -car.slipAngle;
+    const TireSound right = tireState.update(car, 0.1f, false);
+    if (left.depth <= 0.1f || std::fabs(left.depth - right.depth) > 1e-5f ||
+        right.duration <= left.duration) return 43;
+    const TireSound paused = tireState.paused(car);
+    if (paused.depth != 0.0f || std::fabs(paused.speed - right.speed) > 1e-5f ||
+        std::fabs(paused.duration - right.duration) > 1e-5f) return 50;
+    const TireSound resumed = tireState.update(car, 0.0f, false);
+    if (std::fabs(resumed.depth - right.depth) > 1e-5f ||
+        std::fabs(resumed.duration - right.duration) > 1e-5f) return 51;
+    car.lateralSpeed = car.velX = 0.0f;
+    car.slipAngle = 0.0f;
+    const TireSound gap = tireState.update(car, 0.1f, false);
+    car.lateralSpeed = car.velX = 5.0f;
+    car.slipAngle = std::atan2(car.lateralSpeed, car.velZ);
+    if (gap.depth != 0.0f || tireState.update(car, 0.1f, false).duration <= right.duration) return 44;
+    if (tireState.update(car, 0.3f, true).depth != 0.0f ||
+        tireState.update(car, 0.0f, false).duration != 0.0f) return 45;
+    tireState.update(car, 0.1f, false);
+    tireState.reset();
+    if (tireState.update(car, 0.0f, false).duration != 0.0f) return 46;
+    car.onAsphalt = false;
+    if (tireState.update(car, 0.0f, false).depth >= left.depth) return 47;
+
     // --- WAV の読み込み ---------------------------------------------------
     Pcm pcm;
     if (!decodeWav(makeTestWav(44100, 44100, 220.0f), pcm) || pcm.rate != 44100 || pcm.frames() != 44100) {
@@ -240,6 +333,129 @@ int soundTest() {
     for (int i = 0; i < 10; ++i) mixer.render(buf.data(), 2048);
     std::printf("self-test tire rms %.3f\n", rms(buf));
     if (rms(buf) < 0.02f) return 37;
+
+    // 無音走行後や最初のコールバックが滑走中だった場合でも、音量の
+    // エンベロープ以外に車速 0 からの余分な立ち上がり遅れを作らない。
+    // 無音中と発音開始時の速度が異なる条件も、初回発音と同じ波形になる。
+    sound::TireVoice firstSlide, afterSilence;
+    TireSound silent;
+    silent.speed = 5.0f;
+    std::vector<float> silentBuffer(800 * 2, 0.0f);
+    afterSilence.render(silentBuffer.data(), 800, 48000.0f, silent);
+    std::vector<float> firstBlock(800 * 2, 0.0f);
+    std::vector<float> resumedBlock(800 * 2, 0.0f);
+    firstSlide.render(firstBlock.data(), 800, 48000.0f, tire);
+    afterSilence.render(resumedBlock.data(), 800, 48000.0f, tire);
+    if (firstSlide.level() < 0.2f || rms(firstBlock) < 0.01f) return 74;
+    for (size_t i = 0; i < firstBlock.size(); ++i) {
+        if (std::fabs(firstBlock[i] - resumedBlock[i]) > 1e-6f) return 75;
+    }
+
+    // ポーズ中は車速を保持し、フェードの途中で復帰しても音が遅れない。
+    for (int pauseMs : {200, 800}) {
+        sound::TireVoice voice;
+        TireSound sliding = tire;
+        sliding.duration = 6.0f;
+        std::vector<float> work(800 * 2, 0.0f);
+        for (int i = 0; i < 60; ++i) {
+            std::fill(work.begin(), work.end(), 0.0f);
+            voice.render(work.data(), 800, 48000.0f, sliding);
+        }
+        TireSound pausedSlide = sliding;
+        pausedSlide.depth = 0.0f;
+        for (int i = 0; i < pauseMs * 48 / 800; ++i) {
+            std::fill(work.begin(), work.end(), 0.0f);
+            voice.render(work.data(), 800, 48000.0f, pausedSlide);
+        }
+        std::fill(work.begin(), work.end(), 0.0f);
+        voice.render(work.data(), 800, 48000.0f, sliding);
+        if (voice.level() < 0.2f || rms(work) < 0.01f) return 52;
+    }
+
+    // 長い滑りの後、ポーズまたは浅い滑りの継続で duration が 0 に
+    // 戻っても、音色が一度に飛ばない。コールバックの分割にも依存しない。
+    for (bool stop : {true, false}) {
+        constexpr int rate = 48000, frames = 800;
+        sound::TireVoice held, changed, split;
+        TireSound state;
+        state.speed = 25.0f;
+        state.depth = 0.8f;
+        state.duration = 6.0f;
+        std::vector<float> a(frames * 2), b(frames * 2), c(frames * 2), diff(frames * 2);
+        auto warm = [&]() {
+            std::fill(a.begin(), a.end(), 0.0f);
+            std::fill(b.begin(), b.end(), 0.0f);
+            std::fill(c.begin(), c.end(), 0.0f);
+            held.render(a.data(), frames, float(rate), state);
+            changed.render(b.data(), frames, float(rate), state);
+            split.render(c.data(), frames, float(rate), state);
+        };
+        for (int i = 0; i < 120; ++i) warm();
+        if (!stop) {
+            state.depth = 0.08f;
+            for (int i = 0; i < 15; ++i) warm();
+        }
+        state.depth = stop ? 0.0f : 0.08f;
+        std::fill(a.begin(), a.end(), 0.0f);
+        std::fill(b.begin(), b.end(), 0.0f);
+        std::fill(c.begin(), c.end(), 0.0f);
+        held.render(a.data(), frames, float(rate), state);
+        state.duration = 0.0f;
+        changed.render(b.data(), frames, float(rate), state);
+        for (int offset = 0; offset < frames;) {
+            const int count = std::min(127, frames - offset);
+            split.render(c.data() + size_t(offset) * 2, count, float(rate), state);
+            offset += count;
+        }
+        for (size_t i = 0; i < a.size(); ++i) {
+            diff[i] = a[i] - b[i];
+            if (std::fabs(b[i] - c[i]) > 1e-6f) return 76;
+        }
+        if (rms(a) < 1e-4f || rms(diff) > rms(a) * 0.1f) return 77;
+        if (!stop) {
+            // 急変を抑えつつ、新しい音色へはいずれ追随する。
+            for (int i = 0; i < 60; ++i) {
+                std::fill(a.begin(), a.end(), 0.0f);
+                std::fill(b.begin(), b.end(), 0.0f);
+                state.duration = 6.0f;
+                held.render(a.data(), frames, float(rate), state);
+                state.duration = 0.0f;
+                changed.render(b.data(), frames, float(rate), state);
+            }
+            for (size_t i = 0; i < a.size(); ++i) diff[i] = a[i] - b[i];
+            if (rms(diff) < 1e-4f) return 78;
+        }
+    }
+
+    // 出力レートやコールバック分割で音が壊れず、滑りに素早く追従する。
+    for (int rate : {8000, 44100, 48000, 96000}) {
+        const int frames = rate / 2;
+        std::vector<float> whole(size_t(frames) * 2, 0.0f);
+        std::vector<float> chunks(size_t(frames) * 2, 0.0f);
+        sound::TireVoice a, b;
+        a.render(whole.data(), frames, float(rate), tire);
+        for (int offset = 0; offset < frames;) {
+            const int count = std::min(127, frames - offset);
+            b.render(chunks.data() + size_t(offset) * 2, count, float(rate), tire);
+            offset += count;
+        }
+        for (size_t i = 0; i < whole.size(); ++i) {
+            if (!std::isfinite(whole[i]) || std::fabs(whole[i]) > 1.0f ||
+                std::fabs(whole[i] - chunks[i]) > 1e-6f) return 70;
+        }
+        if (rms(whole) < 0.02f || rms(whole) > 0.2f) return 71;
+
+        sound::TireVoice response;
+        std::vector<float> attack(size_t(rate / 10) * 2, 0.0f);
+        response.render(attack.data(), rate / 10, float(rate), tire);
+        const float activeLevel = response.level();
+        if (activeLevel < 0.2f) return 72;  // 0.1 秒以内に立ち上がる
+        TireSound stopped = tire;
+        stopped.depth = 0.0f;
+        std::vector<float> release(size_t(rate / 5) * 2, 0.0f);
+        response.render(release.data(), rate / 5, float(rate), stopped);
+        if (response.level() > activeLevel * 0.1f) return 73;  // 0.2 秒で十分に収束
+    }
 
     // --- エンジン回転数のモデル: 加速でシフトアップ、リミッターで頭打ち ---
     EngineSim sim;

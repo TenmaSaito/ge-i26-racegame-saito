@@ -14,8 +14,7 @@
 //     音程を連続的に変える (段階切替なし)。アクセルで音色の明るさと
 //     音量、回転数に同期した燃焼音 (倍音) を重ねて厚みを出す。
 //   - タイヤ音 (ドリフトのスキール音) は素材を使わず合成する。タイヤが路面で
-//     「張り付く/滑る」を細かく繰り返して鳴る音を、揺らぎのある倍音 (鳴き) +
-//     帯域を絞ったノイズ (擦れ) + 低いノイズ (路面のザラつき) で作る。
+//     揺らぐ帯域ノイズの共振 (鳴き) + 左右の擦れ + 低い路面の音で作る。
 //     ループの継ぎ目が無いので、何秒滑っても同じ音の繰り返しにならない。
 //     滑りの深さ・継続時間・速度で音量/音程/音色が変わる。
 //
@@ -95,18 +94,17 @@ public:
     float level() const { return env_; }
 
 private:
-    float depthSm_ = 0.0f;    // 平滑化した滑りの深さ
+    float depthSm_ = 0.0f;    // 音色用の平滑化した滑りの深さ
     float speedSm_ = 0.0f;    // 平滑化した車速 (m/s)
     float env_ = 0.0f;        // 音量エンベロープ
-    float phase_ = 0.0f;      // 鳴き (倍音) の位相 0..1
-    float chopPhase_ = 0.0f;  // 張り付き/滑りの繰り返し (細かい断続) の位相 0..1
-    float wobble_ = 0.0f, wobbleTarget_ = 0.0f;  // 音程の揺らぎ (ランダム、ゆっくり)
-    float chopRate_ = 30.0f, chopRateTarget_ = 30.0f;  // 断続の速さ (Hz)
-    int wobbleCountdown_ = 0;                     // 次の揺らぎまでのサンプル数
-    float vibratoPhase_ = 0.0f;                   // 細かいビブラートの位相
-    BandPass hiss_[2];        // 擦れ (L/R で別のノイズを通して広がりを出す)
+    float biteSm_ = 0.0f, heatSm_ = 0.0f;  // 継続時間から決まる音色の平滑化値
+    bool characterPrimed_ = false;
+    float wobble_ = 0.0f, wobbleTarget_ = 0.0f; // 不規則な共振の変化
+    float texture_ = 0.0f, textureTarget_ = 0.0f;
+    int wobbleCountdown_ = 0;
+    BandPass resonance_;     // 共通の鳴き
+    BandPass hiss_[2];       // 左右別の擦れ
     float rumble1_ = 0.0f, rumble2_ = 0.0f;  // 路面のザラつき (低域ノイズ)
-    float tone_[2] = {0, 0};  // 鳴きの角を丸めるフィルタ (L/R)
     Random rng_{0x9E3779B9u};
 };
 

@@ -44,8 +44,7 @@ void RaceScene::enter() {
     game_.setShowTuning(false);
     wasCounting_ = false;
     prevCountNum_ = 0;
-    slideTime_ = 0;
-    slideGap_ = 0;
+    tireSound_.reset();
 }
 
 void RaceScene::frame(double dtSeconds) {
@@ -61,6 +60,7 @@ void RaceScene::frame(double dtSeconds) {
     if (reset) {
         app.resetRace();
         syncViewToCar();
+        tireSound_.reset();
     }
 
     // 経過時間の整形: 上限で頭打ちし、FPS は Game 側で平滑化する。
@@ -404,7 +404,8 @@ void RaceScene::updateSound(float elapsed, const DriveInput& raw, const DriveInp
 
     // --- ポーズ中は静かにする -------------------------------------------------
     if (app.paused()) {
-        app.silenceAudio();
+        app.setEngineSound(EngineSound{});
+        app.setTireSound(tireSound_.paused(car));
         return;
     }
 
@@ -416,36 +417,8 @@ void RaceScene::updateSound(float elapsed, const DriveInput& raw, const DriveInp
     app.engine().update(elapsed, car.speed, throttle, wheelSlip, counting);
     app.setEngineSound(app.engine().sound(true));
 
-    // --- タイヤ音: 滑りの「深さ」と「続いている時間」を求める ---------------
-    // 深さ: タイヤが鳴るのは「実際に横へ滑っている」とき。横滑りの速さ (m/s) を
-    //       基本にし、ドリフト中はドリフト量で上乗せする。
-    //       スリップ角だけで決めないこと: ドリフトが終わっても車体の向きと進行方向の
-    //       ずれはしばらく残り、低速では角度そのものが暴れるため、滑っていないのに
-    //       音が鳴り続けてしまう。横滑りが止まれば、ドリフトの判定が残っていても消す。
-    const float lateral = std::fabs(car.lateralSpeed);
-    const float slide = clampf((lateral - 2.5f) / 9.0f, 0.0f, 1.0f);
-    float depth = slide;
-    if (car.drifting) {
-        depth = std::max(depth, 0.6f * car.driftAmount * clampf(lateral / 4.0f, 0.0f, 1.0f));
-    }
-    depth = clampf(depth, 0.0f, 1.0f);
-    if (!car.onAsphalt) depth *= 0.25f;  // 芝ではタイヤは鳴かない (擦れる音だけ)
-    if (counting) depth = 0.0f;
-
-    // 継続時間: 0.25 秒未満の途切れ (切り返しの一瞬など) は同じ滑りとして数える。
-    if (depth > 0.12f) {
-        slideTime_ += elapsed;
-        slideGap_ = 0;
-    } else {
-        slideGap_ += elapsed;
-        if (slideGap_ > 0.25f) slideTime_ = 0;
-    }
-
-    TireSound tire;
-    tire.depth = depth;
-    tire.duration = slideTime_;
-    tire.speed = std::sqrt(car.velX * car.velX + car.velZ * car.velZ);
-    app.setTireSound(tire);
+    // --- タイヤ音: 車の実際の横滑りに追随 --------------------------------
+    app.setTireSound(tireSound_.update(car, elapsed, counting));
 }
 
 // ============================================================================

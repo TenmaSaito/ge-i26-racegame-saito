@@ -116,7 +116,7 @@ public:
         want.format = AUDIO_F32SYS;  // ミキサーは float で書く (変換は SDL が行う)
         want.channels = 2;
 #ifdef __EMSCRIPTEN__
-        want.samples = 2048;  // ブラウザはメインスレッドで回るため余裕を持たせる
+        want.samples = 1024;  // 約 21ms。タイヤ音の遅延と処理余裕の両立
 #else
         want.samples = 1024;  // 約 21ms。操作への反応と途切れにくさの兼ね合い
 #endif

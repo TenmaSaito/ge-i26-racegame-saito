@@ -103,6 +103,13 @@
 <script>
   var Module = {
     canvas: document.getElementById('canvas'),
+    // バージョンごとに JS / WASM / data を揃え、古いページのキャッシュと混在させない。
+    locateFile: function (file, prefix) {
+      if (file === 'racegame.wasm' || file === 'racegame.data') {
+        return 'revisions/20261101-drift-a1/' + file;
+      }
+      return prefix + file;
+    },
     setStatus: function (text) {
       document.getElementById('status').textContent = text || '';
     },
@@ -151,7 +158,7 @@
     });
   })();
 </script>
-<script async src="racegame.js"></script>
+<script async src="revisions/20261101-drift-a1/racegame.js"></script>
 <script>
 // 音声の状態表示。自動再生制限の解除 (クリック・キー・タッチ・パッドで
 // AudioContext を再開) とタブ切替時の一時停止はゲーム本体 (audio.cpp) が

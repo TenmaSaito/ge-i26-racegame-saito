@@ -8,6 +8,7 @@
 
 #include "car.hpp"  // DriveInput
 #include "scene.hpp"
+#include "tiresound.hpp"
 
 class Game;
 
@@ -76,8 +77,7 @@ private:
     int prevCountNum_ = 0;      // 前フレームのカウント数字
 
     // タイヤ音: 滑りが続いている時間 (出だしと持続で音色を変えるため)。
-    float slideTime_ = 0;  // 現在の滑りの継続秒
-    float slideGap_ = 0;   // 滑りが途切れてからの秒 (短い途切れは継続扱い)
+    TireSoundState tireSound_;
 
     // コントローラー振動の状態 (パルス発火のエッジ検出と送信間引き)。
     float rumbleTimer_ = 0;     // 継続振動の再送までの残り秒

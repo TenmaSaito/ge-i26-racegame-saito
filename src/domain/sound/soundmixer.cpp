@@ -167,32 +167,24 @@ void EngineVoice::render(float* out, int frames, float outRate, const EngineSoun
 // ============================================================================
 // タイヤ (ドリフト) 音 ― 合成
 //
-// 実際のスキール音は、タイヤのゴムが路面に「張り付く→滑る」を毎秒数十回
-// 繰り返すことで出る、揺らぎの大きい倍音の多い音。ここではそれを 3 層で作る:
-//   1. 鳴き: 基本周波数 (約 0.5〜1kHz) と倍音。音程はゆっくりランダムに揺れ、
-//      張り付き/滑りの繰り返し (20〜50Hz) で音量が細かく断続する。
-//   2. 擦れ: ノイズを鳴きの 2.3 倍あたりで帯域通過させた「シャー」という成分。
-//   3. ザラつき: 低域だけ残したノイズ (路面を擦るゴロゴロ)。
-// 深く滑るほど低く太く (断続は減る)、浅いと高めでチリチリと断続する。
-// 速いほど高く大きい。滑り始めは鋭く、長く滑るとタイヤが熱を持ったように
-// 低めで擦れの多い音になる。
+// 帯域ノイズによる鳴き・左右の擦過音・低域の路面音を重ねる。
+// 共振と摩擦を不規則に変化させ、一定周期のビブラートや断続を避ける。
+// 音量は実際の滑りを一段のエンベロープで追い、音色だけ別に平滑化する。
 // ============================================================================
 namespace {
-constexpr float kTireAttackTau = 0.06f;    // 滑り始めの立ち上がり
-constexpr float kTireReleaseTau = 0.22f;   // グリップ回復時の消え方
-constexpr float kTireSpeedTau = 0.12f;
+constexpr float kTireAttackTau = 0.025f;
+constexpr float kTireReleaseTau = 0.075f;
+constexpr float kTireSpeedTau = 0.06f;
+constexpr float kTireCharacterTau = 0.12f; // 継続時間がリセットされても音色を急変させない
 constexpr float kTireBiteSec = 0.4f;       // 出だしの「キュッ」が続く目安
 constexpr float kTireHeatStartSec = 1.5f;  // 長く滑ると音色が変わり始める秒数
 constexpr float kTireHeatRangeSec = 4.0f;  // 変化しきるまでの秒数
-constexpr float kTireBaseHz = 560.0f;      // 低速での鳴きの高さ
-constexpr float kTireSpeedHz = 420.0f;     // 速度で上がる分
-constexpr float kTireGain = 0.30f;         // 全体の音量 (エンジン音より一歩引いた大きさ)
-constexpr int kTireBlock = 16;             // 係数をまとめて計算するサンプル数
+constexpr float kTireGain = 0.42f;
 }  // namespace
 
 float BandPass::process(float input, float freq, float q, float rate) {
-    // Chamberlin 型の状態変数フィルタ。f は 32 サンプルごとに変えても滑らか。
-    const float f = 2.0f * std::sin(3.14159265f * std::min(freq, rate * 0.2f) / rate);
+    // 上限を低めに抑え、低い出力サンプルレートでも安定させる。
+    const float f = 2.0f * std::sin(3.14159265f * std::min(freq, rate * 0.14f) / rate);
     low += f * band;
     const float high = input - low - q * band;
     band += f * high;
@@ -204,80 +196,69 @@ void TireVoice::render(float* out, int frames, float outRate, const TireSound& t
     if (depthTarget <= 0.0f && env_ < 1e-5f) {
         env_ = 0.0f;
         depthSm_ = 0.0f;
+        // 無音の間も最新の車速を保持する。次の滑り始めに速度が 0 から
+        // 上昇するのを待つと、立ち上がりの音量が余計に遅れてしまう。
+        speedSm_ = target.speed;
+        characterPrimed_ = false;
         return;  // 無音: 計算を省く
     }
 
-    // --- 継続時間から決まる性格 (この呼び出しの間は一定とみなす) ----------
-    const float bite = std::exp(-target.duration / kTireBiteSec);
-    const float heat = clamp01((target.duration - kTireHeatStartSec) / kTireHeatRangeSec);
+    // 初回呼び出しが既に滑走中の場合や、無音直後に車速が変わった場合も
+    // 現在の速度から始める。音量は従来どおり env_ で滑らかに立ち上げる。
+    if (env_ < 1e-5f) speedSm_ = target.speed;
+
+    // 継続時間はポーズや短い滑りの中断で突然 0 に戻りうる。
+    // 目標音色はサンプル単位で追い、フェード中の音程や擦れを急変させない。
+    const float biteTarget = std::exp(-target.duration / kTireBiteSec);
+    const float heatTarget = clamp01((target.duration - kTireHeatStartSec) / kTireHeatRangeSec);
+    if (!characterPrimed_) {
+        biteSm_ = biteTarget;
+        heatSm_ = heatTarget;
+        characterPrimed_ = true;
+    }
 
     const float kAttack = smoothingCoef(kTireAttackTau, outRate);
     const float kRelease = smoothingCoef(kTireReleaseTau, outRate);
     const float kSpeed = smoothingCoef(kTireSpeedTau, outRate);
-    const float kWobble = smoothingCoef(0.05f, outRate);
-    const float kChop = smoothingCoef(0.15f, outRate);
-    const float toneCoef = lowpassCoef(4500.0f - 1500.0f * heat, outRate);
+    const float kCharacter = smoothingCoef(kTireCharacterTau, outRate);
+    const float kWobble = smoothingCoef(0.045f, outRate);
+    const float kTexture = smoothingCoef(0.012f, outRate);
     const float rumbleCoef = lowpassCoef(300.0f, outRate);
+    // 同じ帯域幅の白色ノイズはレートでエネルギーが変わるため補正する。
+    const float rateGain = std::sqrt(std::max(0.1f, std::min(outRate / 48000.0f, 4.0f)));
 
-    float freq = kTireBaseHz;
-    float levelTarget = 0.0f;
-    float chopDepth = 0.3f;
-    float speedN = 0.0f;
     for (int i = 0; i < frames; ++i) {
-        // --- パラメータ --------------------------------------------------
+        // 音量は未平滑の depth から一度だけ追従する。音色の変化は別に平滑化。
         depthSm_ = follow(depthSm_, depthTarget, kAttack, kRelease);
         speedSm_ += (target.speed - speedSm_) * kSpeed;
-
-        // ランダムな音程の揺らぎ: 40〜90ms ごとに新しい目標を選び、滑らかに追う。
-        if (--wobbleCountdown_ <= 0) {
-            wobbleCountdown_ = int(outRate * (0.04f + 0.05f * (rng_.bipolar() * 0.5f + 0.5f)));
-            wobbleTarget_ = 0.025f * rng_.bipolar();
-            chopRateTarget_ = 35.0f + 13.0f * rng_.bipolar();  // 22〜48Hz
-        }
-        wobble_ += (wobbleTarget_ - wobble_) * kWobble;
-        chopRate_ += (chopRateTarget_ - chopRate_) * kChop;
-
-        // 重い計算 (べき乗・フィルタ係数) は kTireBlock サンプルに 1 回。
-        if (i % kTireBlock == 0) {
-            speedN = clamp01((speedSm_ - 4.0f) / 24.0f);  // 約 14〜100 km/h で 0→1
-            // 音量: 浅い滑りでは小さく、深くなるほど急に大きくなる (常に鳴りっぱなしにしない)。
-            levelTarget = std::pow(depthSm_, 1.4f) * std::sqrt(speedN) * (1.0f + 0.25f * bite);
-            // 鳴きの高さ: 速いほど高い / 深いほど低い / 出だしは高い / 熱で下がる。
-            freq = (kTireBaseHz + kTireSpeedHz * speedN) * (1.0f - 0.10f * depthSm_) *
-                   (1.0f + 0.07f * bite) * (1.0f - 0.07f * heat);
-            // 断続の深さ: 浅い滑りほどチリチリと途切れる。
-            chopDepth = 0.25f + 0.35f * (1.0f - depthSm_);
-        }
+        biteSm_ += (biteTarget - biteSm_) * kCharacter;
+        heatSm_ += (heatTarget - heatSm_) * kCharacter;
+        const float speedN = clamp01((speedSm_ - 4.0f) / 24.0f);
+        const float levelTarget = depthTarget * (0.55f + 0.45f * depthTarget) *
+                                  std::sqrt(speedN) * (1.0f + 0.15f * biteSm_);
         env_ = follow(env_, levelTarget, kAttack, kRelease);
 
-        // --- 1. 鳴き (倍音) ------------------------------------------------
-        vibratoPhase_ += 7.3f / outRate;
-        if (vibratoPhase_ >= 1.0f) vibratoPhase_ -= 1.0f;
-        const float pitch = freq * (1.0f + wobble_ + 0.006f * std::sin(vibratoPhase_ * kTwoPi));
-        phase_ += pitch / outRate;
-        if (phase_ >= 1.0f) phase_ -= std::floor(phase_);
-        const float ph = phase_ * kTwoPi;
-        const float squeal = std::sin(ph) + 0.42f * std::sin(2.0f * ph + 0.7f) +
-                             0.18f * std::sin(3.0f * ph + 1.9f) + 0.08f * std::sin(5.0f * ph);
-        chopPhase_ += chopRate_ / outRate;
-        if (chopPhase_ >= 1.0f) chopPhase_ -= 1.0f;
-        const float chop = 1.0f - chopDepth * (0.5f + 0.5f * std::sin(chopPhase_ * kTwoPi));
-
-        // --- 2. 擦れ (帯域ノイズ、左右で別のノイズ) / 3. ザラつき (低域ノイズ) ---
-        const float hissL = hiss_[0].process(rng_.bipolar(), pitch * 2.3f, 0.35f, outRate);
-        const float hissR = hiss_[1].process(rng_.bipolar(), pitch * 2.3f, 0.35f, outRate);
+        // 周期的なチョップではなく、短いランダムな変化で摩擦を表す。
+        if (--wobbleCountdown_ <= 0) {
+            wobbleCountdown_ = std::max(1, int(outRate * (0.025f + 0.035f *
+                                      (rng_.bipolar() * 0.5f + 0.5f))));
+            wobbleTarget_ = 0.06f * rng_.bipolar();
+            textureTarget_ = rng_.bipolar();
+        }
+        wobble_ += (wobbleTarget_ - wobble_) * kWobble;
+        texture_ += (textureTarget_ - texture_) * kTexture;
+        const float pitch = (650.0f + 360.0f * speedN) * (1.0f - 0.08f * depthSm_) *
+                            (1.0f + 0.06f * biteSm_ - 0.06f * heatSm_ + wobble_);
+        const float squeal = resonance_.process(rng_.bipolar(), pitch, 0.48f, outRate);
+        const float hissL = hiss_[0].process(rng_.bipolar(), pitch * 2.2f, 0.75f, outRate);
+        const float hissR = hiss_[1].process(rng_.bipolar(), pitch * 2.2f, 0.75f, outRate);
         rumble1_ += (rng_.bipolar() - rumble1_) * rumbleCoef;
         rumble2_ += (rumble1_ - rumble2_) * rumbleCoef;
         const float rumble = rumble2_ * 1.6f * depthSm_ * speedN;
-        const float hissGain = 0.45f + 0.35f * heat;
-
-        // 鳴きの角を少し丸める (熱で暗くなる)。
-        tone_[0] += (squeal * chop * 0.55f - tone_[0]) * toneCoef;
-        tone_[1] = tone_[0];
-
-        const float volume = env_ * kTireGain;
-        out[i * 2] += (tone_[0] + hissL * hissGain + rumble) * volume;
-        out[i * 2 + 1] += (tone_[1] + hissR * hissGain + rumble) * volume;
+        const float hissGain = 0.75f + 0.20f * heatSm_;
+        const float volume = env_ * kTireGain * rateGain * (1.0f + 0.15f * texture_);
+        out[i * 2] += (squeal * 0.85f + hissL * hissGain + rumble) * volume;
+        out[i * 2 + 1] += (squeal * 0.85f + hissR * hissGain + rumble) * volume;
     }
 }
 
