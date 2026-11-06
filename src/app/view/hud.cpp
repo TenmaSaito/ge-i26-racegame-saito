@@ -632,8 +632,8 @@ void Hud::drawTitle(Game& app, float t) {
         float w = float(std::strlen(text)) * 6.0f * scale;
         hud.drawText((W - w) * 0.5f, y, scale, text, r, g, b, 1);
     };
-    centerText(H * 0.14f, 2.0f, "DRIFT RACE", 0.85f, 0.88f, 0.92f);
-    centerText(H * 0.22f, 5.0f, app.title().c_str(), 1.0f, 0.95f, 0.9f);
+    centerText(H * 0.14f, 4.0f, kGameTitle, 1.0f, 0.95f, 0.9f);
+    centerText(H * 0.24f, 3.0f, app.title().c_str(), 0.85f, 0.88f, 0.92f);
     char line[96];
     if (app.laps() > 0) {
         std::snprintf(line, sizeof(line), "%d LAP%s RACE%s", app.laps(), app.laps() > 1 ? "S" : "",

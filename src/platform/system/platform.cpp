@@ -228,7 +228,7 @@ bool createWindow(Game& app) {
 #endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    gWindow = SDL_CreateWindow(app.title().c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+    gWindow = SDL_CreateWindow(kGameTitle, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
                                SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     if (!gWindow) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());

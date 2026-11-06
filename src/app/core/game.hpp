@@ -35,9 +35,11 @@
 class Hud;     // HUD 描画器 (hud.hpp)。Game が 1 つ保持する
 class IScene;  // 現在のシーン (scene.hpp の基底)
 
+inline constexpr char kGameTitle[] = "ARC FLOW DRIFT";
+
 class Game {
 public:
-    // title はウィンドウタイトル (コース名)、track は読み込み済みコース。
+    // title はコース表示名、track は読み込み済みコース。
     // initialStem は最初に読み込むコース (例: "suzuka")。
     // コース実体の読み込みは setTrackLoader で差し込まれた外側の仕事。
     explicit Game(std::string initialStem);
